@@ -7,6 +7,7 @@ import {
   ExplanationArtifact,
   WorldState,
 } from "@/lib/sim/types";
+import { ensureWorldState } from "@/lib/sim/campaign";
 import { SimulationStore } from "./store-types";
 import { getSnapshotsToPrune } from "@/lib/sim/snapshot";
 
@@ -52,6 +53,12 @@ export class PrismaStore implements SimulationStore {
     });
   }
 
+  async deleteProject(id: string): Promise<void> {
+    await prisma.project.delete({
+      where: { id },
+    });
+  }
+
   async getScenario(id: string): Promise<ScenarioRecord | null> {
     const s = await prisma.scenario.findUnique({ 
       where: { id },
@@ -67,6 +74,7 @@ export class PrismaStore implements SimulationStore {
       shockLikelihood: s.rules.shockLikelihood,
       maxTicks: s.rules.maxTicks,
       aiConfidenceFloor: s.rules.aiConfidenceFloor,
+      scenarioIntensity: 0.5,
     } : ({} as any);
 
     return {
@@ -137,10 +145,11 @@ export class PrismaStore implements SimulationStore {
       name: b.name,
       summary: b.summary,
       branchPointTick: b.branchPointTick,
+      branchOriginEventId: null,
       currentTick: b.currentTick,
       stateHash: b.stateHash,
       status: b.status as any,
-      latestState: b.latestState as unknown as WorldState,
+      latestState: ensureWorldState(b.latestState as unknown as WorldState),
     };
   }
 
@@ -154,10 +163,11 @@ export class PrismaStore implements SimulationStore {
       name: b.name,
       summary: b.summary,
       branchPointTick: b.branchPointTick,
+      branchOriginEventId: null,
       currentTick: b.currentTick,
       stateHash: b.stateHash,
       status: b.status as any,
-      latestState: b.latestState as unknown as WorldState,
+      latestState: ensureWorldState(b.latestState as unknown as WorldState),
     }));
   }
 
@@ -175,13 +185,13 @@ export class PrismaStore implements SimulationStore {
         currentTick: branch.currentTick,
         stateHash: branch.stateHash,
         status: branch.status,
-        latestState: branch.latestState as any,
+        latestState: ensureWorldState(branch.latestState) as any,
       },
       update: {
         currentTick: branch.currentTick,
         stateHash: branch.stateHash,
         status: branch.status,
-        latestState: branch.latestState as any,
+        latestState: ensureWorldState(branch.latestState) as any,
       },
     });
   }
@@ -195,7 +205,7 @@ export class PrismaStore implements SimulationStore {
       tick: s.tick,
       kind: s.kind as any,
       stateHash: s.stateHash,
-      state: s.state as unknown as WorldState,
+      state: ensureWorldState(s.state as unknown as WorldState),
       createdAt: s.createdAt.toISOString(),
     };
   }
@@ -211,7 +221,7 @@ export class PrismaStore implements SimulationStore {
       tick: s.tick,
       kind: s.kind as any,
       stateHash: s.stateHash,
-      state: s.state as unknown as WorldState,
+      state: ensureWorldState(s.state as unknown as WorldState),
       createdAt: s.createdAt.toISOString(),
     }));
   }
@@ -246,19 +256,36 @@ export class PrismaStore implements SimulationStore {
   }
 
   async getEvents(branchId: string): Promise<SimEvent[]> {
-    const evs = await prisma.event.findMany({
+    const evs = (await prisma.event.findMany({
       where: { branchId },
       orderBy: { tick: "asc" },
-    });
+    })) as any[];
     return evs.map((e) => ({
       id: e.id,
       tick: e.tick,
       type: e.type as any,
       sourceAgentId: e.sourceAgentId,
       targetAgentId: e.targetAgentId,
+      actorIds: (e.actorIds as string[] | null) ?? [],
+      targetIds: (e.targetIds as string[] | null) ?? [],
       description: e.description,
       impact: e.impact as any,
       causeChain: e.causeChain as any,
+      causedBy: (e.causedBy as string[] | null) ?? [],
+      parentEventIds: (e.causedBy as string[] | null) ?? [],
+      causalDepth:
+        typeof (e.metadata as Record<string, unknown> | null)?.causalDepth === "number"
+          ? ((e.metadata as Record<string, unknown>).causalDepth as number)
+          : 0,
+      causalType:
+        typeof (e.metadata as Record<string, unknown> | null)?.causalType === "string"
+          ? ((e.metadata as Record<string, unknown>).causalType as SimEvent["causalType"])
+          : null,
+      affects: (e.affects as string[] | null) ?? [],
+      invalidates: (e.invalidates as string[] | null) ?? [],
+      branchOriginEventId: e.branchOriginEventId,
+      confidence: e.confidence,
+      tags: (e.tags as string[] | null) ?? [],
       metadata: e.metadata as any,
     }));
   }
@@ -276,10 +303,22 @@ export class PrismaStore implements SimulationStore {
             type: e.type,
             sourceAgentId: e.sourceAgentId,
             targetAgentId: e.targetAgentId,
+            actorIds: e.actorIds as any,
+            targetIds: e.targetIds as any,
             description: e.description,
             impact: e.impact as any,
             causeChain: e.causeChain as any,
-            metadata: e.metadata as any,
+            causedBy: (e.parentEventIds ?? e.causedBy) as any,
+            affects: e.affects as any,
+            invalidates: e.invalidates as any,
+            branchOriginEventId: e.branchOriginEventId,
+            confidence: e.confidence,
+            tags: e.tags as any,
+            metadata: {
+              ...(e.metadata ?? {}),
+              causalDepth: e.causalDepth,
+              causalType: e.causalType,
+            } as any,
           },
           update: {}, // Events are immutable
         })

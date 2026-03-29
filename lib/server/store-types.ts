@@ -14,6 +14,7 @@ export interface SimulationStore {
   getProject(id: string): Promise<ProjectRecord | null>;
   listProjects(): Promise<ProjectRecord[]>;
   saveProject(project: ProjectRecord): Promise<void>;
+  deleteProject(id: string): Promise<void>;
 
   // Scenarios
   getScenario(id: string): Promise<ScenarioRecord | null>;

@@ -11,6 +11,7 @@ declare module "next-auth" {
 
 // NextAuth configuration
 const nextAuth = NextAuth({
+  trustHost: true,
   providers: [
     GitHub({
       clientId: process.env.GITHUB_ID ?? "mock",
@@ -43,8 +44,8 @@ const nextAuth = NextAuth({
 const originalAuth = nextAuth.auth;
 
 export const auth = async (...args: any[]) => {
-  // If we are in development and no GitHub credentials, return a mock session
-  if (process.env.NODE_ENV === "development" && (!process.env.GITHUB_ID || process.env.GITHUB_ID === "mock")) {
+  // If GitHub credentials are not configured, return a mock session for local usage.
+  if (!process.env.GITHUB_ID || process.env.GITHUB_ID === "mock") {
     return {
       user: {
         id: "dev-user-id",
