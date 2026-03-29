@@ -1,5 +1,8 @@
 "use client";
 
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 interface NarrativeCardProps {
   title: string;
   summary: string;
@@ -17,124 +20,61 @@ export function NarrativeCard({
   generatedBy,
   tick,
 }: NarrativeCardProps) {
+  const confidenceWidth = Math.max(0, Math.min(100, confidence * 100));
+  const confidenceTone =
+    confidence > 0.7
+      ? "bg-[#7dc08f]"
+      : confidence > 0.4
+        ? "bg-[var(--accent-primary)]"
+        : "bg-[#d77d7d]";
+
   return (
-    <div className="narrative-card surface-elevated">
-      <div className="narrative-header">
-        <h3 className="narrative-title">{title}</h3>
-        <div className="narrative-meta">
-          {tick !== undefined && <span className="tag mono">T{tick}</span>}
-          <span className={`tag ${generatedBy === "ai" ? "tag-ai" : ""}`}>
-            {generatedBy === "ai" ? "🤖 AI" : "📊 Heuristic"}
-          </span>
+    <Card className="h-full">
+      <CardHeader className="gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <CardTitle className="text-base">{title}</CardTitle>
+          <div className="flex items-center gap-2">
+            {tick !== undefined ? <Badge>T{tick}</Badge> : null}
+            <Badge variant={generatedBy === "ai" ? "accent" : "default"}>
+              {generatedBy === "ai" ? "AI signal" : "Heuristic signal"}
+            </Badge>
+          </div>
         </div>
-      </div>
+      </CardHeader>
 
-      <p className="narrative-summary">{summary}</p>
+      <CardContent className="grid gap-4">
+        <p className="text-sm leading-6 text-[var(--text-secondary)]">{summary}</p>
 
-      {evidence.length > 0 && (
-        <div className="narrative-evidence">
-          <h4 className="narrative-evidence-title">Evidence</h4>
-          <ul className="narrative-evidence-list">
-            {evidence.map((item, i) => (
-              <li key={`evidence-${title}-${i}`}>{item}</li>
-            ))}
-          </ul>
+        {evidence.length > 0 ? (
+          <div className="grid gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+              Evidence
+            </div>
+            <ul className="grid gap-2">
+              {evidence.map((item, index) => (
+                <li
+                  key={`evidence-${title}-${index}`}
+                  className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2 text-sm text-[var(--text-secondary)]"
+                >
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="grid gap-2">
+          <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+            <span>Confidence</span>
+            <span className="font-mono text-[var(--text-primary)]">
+              {confidenceWidth.toFixed(0)}%
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--bg-elevated)]">
+            <div className={`h-full rounded-full ${confidenceTone}`} style={{ width: `${confidenceWidth}%` }} />
+          </div>
         </div>
-      )}
-
-      <div className="narrative-confidence">
-        <span>Confidence</span>
-        <div className="progress-bar" style={{ flex: 1 }}>
-          <div
-            className="progress-bar-fill"
-            style={{
-              width: `${confidence * 100}%`,
-              background:
-                confidence > 0.7
-                  ? "var(--status-running)"
-                  : confidence > 0.4
-                    ? "var(--status-paused)"
-                    : "var(--status-error)",
-            }}
-          />
-        </div>
-        <span className="mono">{(confidence * 100).toFixed(0)}%</span>
-      </div>
-
-      <style jsx>{`
-        .narrative-card {
-          padding: var(--space-lg);
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-md);
-        }
-
-        .narrative-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: var(--space-md);
-        }
-
-        .narrative-title {
-          font-size: 1rem;
-          font-weight: 600;
-        }
-
-        .narrative-meta {
-          display: flex;
-          gap: 4px;
-          flex-shrink: 0;
-        }
-
-        .narrative-summary {
-          font-size: 0.875rem;
-          line-height: 1.6;
-          color: var(--text-secondary);
-        }
-
-        .narrative-evidence-title {
-          font-size: 0.6875rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: var(--text-muted);
-          margin-bottom: var(--space-xs);
-        }
-
-        .narrative-evidence-list {
-          list-style: none;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .narrative-evidence-list li {
-          font-size: 0.8125rem;
-          color: var(--text-secondary);
-          padding-left: var(--space-md);
-          position: relative;
-        }
-
-        .narrative-evidence-list li::before {
-          content: "→";
-          position: absolute;
-          left: 0;
-          color: var(--accent-primary);
-        }
-
-        .narrative-confidence {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-          font-size: 0.75rem;
-          color: var(--text-muted);
-        }
-
-        .tag-ai {
-          background: rgba(99, 102, 241, 0.2);
-          color: var(--accent-primary);
-        }
-      `}</style>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

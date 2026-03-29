@@ -1,215 +1,267 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import type { AgentStateDiff } from "@/lib/sim/branch";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type {
+  AgentStateDiff,
+  ConsequenceContrast,
+  FrontStateDiff,
+  RouteStateDiff,
+} from "@/lib/sim/branch";
 import type { SimEvent } from "@/lib/sim/types";
 
 interface BranchDiffProps {
-  branchA: { id: string; name: string; tick: number };
-  branchB: { id: string; name: string; tick: number };
-  divergence: {
-    commonAncestorTick: number;
-    agentDiffs: AgentStateDiff[];
-    branchAEvents: SimEvent[];
-    branchBEvents: SimEvent[];
+  readonly branchA: { id: string; name: string; tick: number };
+  readonly branchB: { id: string; name: string; tick: number };
+  readonly divergence: {
+    readonly commonAncestorTick: number;
+    readonly agentDiffs: AgentStateDiff[];
+    readonly frontDiffs: FrontStateDiff[];
+    readonly routeDiffs: RouteStateDiff[];
+    readonly contrasts: ConsequenceContrast[];
+    readonly branchAEvents: SimEvent[];
+    readonly branchBEvents: SimEvent[];
   };
 }
 
 export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
+  const hasDivergence =
+    divergence.agentDiffs.length > 0 ||
+    divergence.frontDiffs.length > 0 ||
+    divergence.routeDiffs.length > 0 ||
+    divergence.contrasts.length > 0;
+
   return (
-    <div className="branch-diff">
-      {/* Header */}
-      <div className="diff-header">
-        <div className="diff-branch-label">
-          <span className="status-dot" data-status="active" />
-          <strong>{branchA.name}</strong>
-          <span className="mono" style={{ color: "var(--text-muted)" }}>T{branchA.tick}</span>
-        </div>
-        <div className="diff-vs">vs</div>
-        <div className="diff-branch-label">
-          <span className="status-dot" data-status="branch-created" />
-          <strong>{branchB.name}</strong>
-          <span className="mono" style={{ color: "var(--text-muted)" }}>T{branchB.tick}</span>
-        </div>
-      </div>
+    <div className="grid gap-5">
+      <Card className="bg-[var(--bg-dock)]/92">
+        <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <BranchBadge name={branchA.name} tick={branchA.tick} variant="accent" />
+            <span className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+              versus
+            </span>
+            <BranchBadge name={branchB.name} tick={branchB.tick} />
+          </div>
+          <Badge>Shared history until T{divergence.commonAncestorTick}</Badge>
+        </CardContent>
+      </Card>
 
-      <div className="diff-ancestor">
-        Common ancestor: Tick {divergence.commonAncestorTick}
-      </div>
-
-      {/* Agent state diffs */}
-      {divergence.agentDiffs.length > 0 && (
-        <div className="diff-section">
-          <h4 className="diff-section-title">Agent Differences</h4>
-          <div className="diff-agents">
-            {divergence.agentDiffs.map((diff) => (
-              <div key={diff.agentId} className="diff-agent surface">
-                <h5>{diff.agentName}</h5>
-                <div className="diff-fields">
-                  {diff.diffs.map((d) => (
-                    <div key={d.field} className="diff-field">
-                      <span className="diff-field-name">{d.field}</span>
-                      <span className="mono" style={{ color: "var(--text-secondary)" }}>
-                        {d.valueA.toFixed(1)}
-                      </span>
-                      <span className="diff-arrow">→</span>
-                      <span
-                        className="mono"
-                        style={{
-                          color: d.delta > 0 ? "var(--rel-trust-positive)" : "var(--rel-trust-negative)",
-                        }}
+      {hasDivergence ? (
+        <section className="grid gap-3">
+          <SectionHeading title="Key consequences" />
+          <div className="grid gap-3 xl:grid-cols-2">
+            {divergence.contrasts.map((contrast) => (
+              <Card key={contrast.title}>
+                <CardHeader className="pb-2">
+                  <CardTitle>{contrast.title}</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <p className="text-sm leading-6 text-[var(--text-secondary)]">
+                    {contrast.summary}
+                  </p>
+                  <ul className="grid gap-2">
+                    {contrast.evidence.map((item) => (
+                      <li
+                        key={item}
+                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2 text-sm text-[var(--text-secondary)]"
                       >
-                        {d.valueB.toFixed(1)}
-                        <small> ({d.delta > 0 ? "+" : ""}{d.delta.toFixed(1)})</small>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <Card className="border-[var(--border-strong)] bg-[var(--bg-dock)]/94">
+          <CardHeader>
+            <Badge variant="success" className="w-fit">
+              No divergence yet
+            </Badge>
+            <CardTitle>These branches are still narratively aligned</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <p className="max-w-[72ch] text-sm leading-6 text-[var(--text-secondary)]">
+              Nothing meaningful has split between these timelines yet. Run additional ticks, inject
+              a consequence, or branch from a more volatile event to surface a sharper contrast.
+            </p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <MetricCard label="Shared until" value={`T${divergence.commonAncestorTick}`} />
+              <MetricCard label={branchA.name} value={`${divergence.branchAEvents.length} events`} />
+              <MetricCard label={branchB.name} value={`${divergence.branchBEvents.length} events`} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {divergence.frontDiffs.length > 0 ? (
+        <section className="grid gap-3">
+          <SectionHeading title="Front divergence" />
+          <div className="grid gap-3 xl:grid-cols-2">
+            {divergence.frontDiffs.map((front) => (
+              <Card key={front.frontId}>
+                <CardHeader className="pb-2">
+                  <CardTitle>{front.frontName}</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3 text-sm text-[var(--text-secondary)]">
+                  <MetricRow
+                    label={branchA.name}
+                    value={`${Math.round(front.progressA * 100)} progress / ${Math.round(front.pressureA * 100)} pressure`}
+                  />
+                  <MetricRow
+                    label={branchB.name}
+                    value={`${Math.round(front.progressB * 100)} progress / ${Math.round(front.pressureB * 100)} pressure`}
+                  />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {divergence.routeDiffs.length > 0 ? (
+        <section className="grid gap-3">
+          <SectionHeading title="Route consequences" />
+          <div className="grid gap-3 xl:grid-cols-2">
+            {divergence.routeDiffs.map((route) => (
+              <Card key={route.routeId}>
+                <CardHeader className="pb-2">
+                  <CardTitle>{route.routeName}</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3 text-sm text-[var(--text-secondary)]">
+                  <MetricRow
+                    label={branchA.name}
+                    value={`${route.statusA} · ${Math.round(route.integrityA * 100)} integrity · ${Math.round(route.riskA * 100)} risk`}
+                  />
+                  <MetricRow
+                    label={branchB.name}
+                    value={`${route.statusB} · ${Math.round(route.integrityB * 100)} integrity · ${Math.round(route.riskB * 100)} risk`}
+                  />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {divergence.agentDiffs.length > 0 ? (
+        <section className="grid gap-3">
+          <SectionHeading title="Actor state changes" />
+          <div className="grid gap-3">
+            {divergence.agentDiffs.map((diff) => (
+              <Card key={diff.agentId}>
+                <CardHeader className="pb-2">
+                  <CardTitle>{diff.agentName}</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-2">
+                  {diff.diffs.map((field) => (
+                    <div
+                      key={field.field}
+                      className="grid grid-cols-[88px_1fr] gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2 text-sm md:grid-cols-[88px_80px_28px_80px_1fr]"
+                    >
+                      <span className="text-[var(--text-secondary)]">{field.field}</span>
+                      <span className="font-mono text-[var(--text-primary)]">
+                        {field.valueA.toFixed(1)}
+                      </span>
+                      <span className="hidden text-[var(--text-muted)] md:inline">→</span>
+                      <span className="font-mono text-[var(--text-primary)]">
+                        {field.valueB.toFixed(1)}
+                      </span>
+                      <span className="text-[var(--text-muted)]">
+                        {field.delta > 0 ? "+" : ""}
+                        {field.delta.toFixed(1)}
                       </span>
                     </div>
                   ))}
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             ))}
           </div>
-        </div>
-      )}
+        </section>
+      ) : null}
 
-      {/* Event timelines */}
-      <div className="diff-events-grid">
-        <div className="diff-section">
-          <h4 className="diff-section-title">
-            {branchA.name} Events ({divergence.branchAEvents.length})
-          </h4>
-          <div className="diff-event-list">
-            {divergence.branchAEvents.slice(-15).map((evt) => (
-              <div key={evt.id} className="diff-event">
-                <span className="diff-event-tick mono">T{evt.tick}</span>
-                <span className="diff-event-desc">{evt.description}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="diff-section">
-          <h4 className="diff-section-title">
-            {branchB.name} Events ({divergence.branchBEvents.length})
-          </h4>
-          <div className="diff-event-list">
-            {divergence.branchBEvents.slice(-15).map((evt) => (
-              <div key={evt.id} className="diff-event">
-                <span className="diff-event-tick mono">T{evt.tick}</span>
-                <span className="diff-event-desc">{evt.description}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="grid gap-3 xl:grid-cols-2">
+        <EventColumn branch={branchA.name} events={divergence.branchAEvents} />
+        <EventColumn branch={branchB.name} events={divergence.branchBEvents} />
       </div>
-
-      <style jsx>{`
-        .branch-diff {
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-lg);
-        }
-
-        .diff-header {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: var(--space-xl);
-        }
-
-        .diff-branch-label {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-        }
-
-        .diff-vs {
-          color: var(--text-muted);
-          font-size: 0.875rem;
-        }
-
-        .diff-ancestor {
-          text-align: center;
-          font-size: 0.8125rem;
-          color: var(--text-muted);
-          padding: var(--space-sm);
-          background: var(--bg-surface);
-          border-radius: var(--radius-md);
-        }
-
-        .diff-section-title {
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: var(--text-muted);
-          margin-bottom: var(--space-sm);
-        }
-
-        .diff-agents {
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-sm);
-        }
-
-        .diff-agent {
-          padding: var(--space-md);
-        }
-
-        .diff-agent h5 {
-          font-size: 0.875rem;
-          margin-bottom: var(--space-sm);
-        }
-
-        .diff-fields {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .diff-field {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-          font-size: 0.8125rem;
-        }
-
-        .diff-field-name {
-          width: 80px;
-          color: var(--text-secondary);
-        }
-
-        .diff-arrow {
-          color: var(--text-muted);
-        }
-
-        .diff-events-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: var(--space-md);
-        }
-
-        .diff-event-list {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .diff-event {
-          display: flex;
-          gap: var(--space-sm);
-          font-size: 0.75rem;
-          line-height: 1.4;
-        }
-
-        .diff-event-tick {
-          color: var(--text-muted);
-          flex-shrink: 0;
-          font-size: 0.6875rem;
-        }
-
-        .diff-event-desc {
-          color: var(--text-secondary);
-        }
-      `}</style>
     </div>
+  );
+}
+
+function BranchBadge({
+  name,
+  tick,
+  variant,
+}: {
+  name: string;
+  tick: number;
+  variant?: "accent" | "default";
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2">
+      <Badge variant={variant === "accent" ? "accent" : "default"}>{name}</Badge>
+      <span className="font-mono text-xs text-[var(--text-muted)]">T{tick}</span>
+    </div>
+  );
+}
+
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+      {title}
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-4 py-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+        {label}
+      </div>
+      <div className="text-base font-semibold text-[var(--text-primary)]">{value}</div>
+    </div>
+  );
+}
+
+function MetricRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+        {label}
+      </div>
+      <div>{value}</div>
+    </div>
+  );
+}
+
+function EventColumn({ branch, events }: { readonly branch: string; readonly events: SimEvent[] }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>{branch}</CardTitle>
+          <Badge>{events.length} events</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        {events.slice(-15).map((event) => (
+          <div
+            key={event.id}
+            className="grid gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-xs text-[var(--text-muted)]">T{event.tick}</span>
+              {event.causedBy.length > 0 ? <Badge>{event.causedBy.length} parents</Badge> : null}
+            </div>
+            <div className="text-sm leading-6 text-[var(--text-secondary)]">
+              {event.description}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
