@@ -4,7 +4,7 @@
  * Separates AI rationale from simulation truth.
  */
 
-import type { Agent, ActionProposal, WorldState } from "@/lib/sim/types";
+import type { Agent, ActionProposal, CampaignSetupDraft, WorldState } from "@/lib/sim/types";
 import {
   validateProposal,
   checkConstraints,
@@ -12,7 +12,9 @@ import {
 } from "@/lib/sim/ai/proposal";
 import { generateFallbackProposal } from "@/lib/sim/ai/fallback";
 import { AICache } from "./cache";
-import { buildActionPrompt, buildExplanationPrompt, buildNarrativePrompt, buildGroupActionPrompt } from "./prompts";
+import { CampaignSetupDraftSchema } from "@/lib/sim/types";
+import { buildFallbackCampaignSetupDraft } from "@/lib/sim/setup";
+import { buildActionPrompt, buildExplanationPrompt, buildNarrativePrompt, buildGroupActionPrompt, buildSimulationDescriptionPrompt, buildCampaignSetupPrompt } from "./prompts";
 import { createRng } from "@/lib/sim/seed";
 import { getStore } from "../store";
 
@@ -25,6 +27,19 @@ interface AIConfig {
   baseUrl?: string;
 }
 
+const DEFAULT_MODELS: Record<AIConfig["provider"], string> = {
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-3-5-sonnet-20241022",
+  gemini: "gemini-2.0-flash",
+  groq: "llama-3.3-70b-versatile",
+  ollama: "llama3",
+};
+
+const DEPRECATED_MODEL_MIGRATIONS: Record<string, string> = {
+  "llama3-70b-8192": "llama-3.3-70b-versatile",
+  "llama3-8b-8192": "llama-3.1-8b-instant",
+};
+
 /**
  * Get action proposals for all alive agents in a branch.
  * Uses AI when available, falls back to heuristics otherwise.
@@ -35,6 +50,8 @@ export async function getActionProposals(
   stateHash: string,
   config: AIConfig | null
 ): Promise<{ proposals: ActionProposal[]; source: "ai" | "heuristic" | "ledger" }> {
+  const normalizedConfig = config ? normalizeAiConfig(config) : null;
+
   // 1. Check Permanent Ledger (Direct match for this branch/tick)
   const store = getStore();
   const ledgerMatch = await store.getProposals(branchId, worldState.tick);
@@ -45,7 +62,7 @@ export async function getActionProposals(
   const aliveAgents = worldState.agents.filter((a) => a.status === "alive");
 
   // If no AI config, use heuristics
-  if (!config?.apiKey) {
+  if (!normalizedConfig?.apiKey) {
     const rng = createRng(worldState.seed + worldState.tick * 1000);
     const proposals = aliveAgents
       .map((agent) => generateFallbackProposal(agent, worldState.agents, worldState.relationships, rng))
@@ -80,7 +97,7 @@ export async function getActionProposals(
         const cached = proposalCache.get(cacheKey);
         if (cached) return [cached];
 
-        const p = await getAgentProposal(agent, worldState, config);
+        const p = await getAgentProposal(agent, worldState, normalizedConfig);
         if (p) {
           proposalCache.set(cacheKey, p);
           return [p];
@@ -91,7 +108,7 @@ export async function getActionProposals(
       // Group Think call
       try {
         const prompt = buildGroupActionPrompt(fid, agents, worldState);
-        const raw = await callAI(prompt, config);
+        const raw = await callAI(prompt, normalizedConfig);
         const parsed = extractJSON(raw) as { proposals: ActionProposal[] } | null;
         
         if (parsed?.proposals && Array.isArray(parsed.proposals)) {
@@ -221,7 +238,9 @@ export async function generateExplanation(
   confidence: number;
   generatedBy: "ai" | "heuristic";
 } | null> {
-  if (!config?.apiKey) {
+  const normalizedConfig = config ? normalizeAiConfig(config) : null;
+
+  if (!normalizedConfig?.apiKey) {
     return {
       title: "Heuristic Analysis",
       summary: `${description} — driven by agent goals and relationship dynamics.`,
@@ -233,7 +252,7 @@ export async function generateExplanation(
 
   try {
     const prompt = buildExplanationPrompt(description, worldState);
-    const raw = await callAI(prompt, config);
+    const raw = await callAI(prompt, normalizedConfig);
     const parsed = extractJSON(raw);
 
     if (parsed && typeof parsed === "object") {
@@ -266,7 +285,9 @@ export async function generateNarrative(
   confidence: number;
   generatedBy: "ai" | "heuristic";
 } | null> {
-  if (!config?.apiKey) {
+  const normalizedConfig = config ? normalizeAiConfig(config) : null;
+
+  if (!normalizedConfig?.apiKey) {
     const topAgent = [...worldState.agents]
       .filter((a) => a.status === "alive")
       .sort((a, b) => b.state.influence - a.state.influence)[0];
@@ -282,7 +303,7 @@ export async function generateNarrative(
 
   try {
     const prompt = buildNarrativePrompt(worldState);
-    const raw = await callAI(prompt, config);
+    const raw = await callAI(prompt, normalizedConfig);
     const parsed = extractJSON(raw);
 
     if (parsed && typeof parsed === "object") {
@@ -302,12 +323,78 @@ export async function generateNarrative(
   return null;
 }
 
+export async function generateSimulationDescription(
+  name: string,
+  config: AIConfig | null
+): Promise<string | null> {
+  const normalizedConfig = config ? normalizeAiConfig(config) : null;
+  if (!normalizedConfig?.apiKey || !name.trim()) {
+    return null;
+  }
+
+  try {
+    const prompt = buildSimulationDescriptionPrompt(name.trim());
+    const raw = await callAI(prompt, normalizedConfig);
+    const parsed = extractJSON(raw);
+
+    if (parsed && typeof parsed === "object" && typeof (parsed as Record<string, unknown>).description === "string") {
+      return ((parsed as Record<string, unknown>).description as string).trim();
+    }
+  } catch (error) {
+    console.error("[AI] Simulation description generation failed:", error);
+  }
+
+  return null;
+}
+
+export async function generateCampaignSetup(
+  name: string,
+  description: string | undefined,
+  config: AIConfig | null
+): Promise<CampaignSetupDraft> {
+  const normalizedConfig = config ? normalizeAiConfig(config) : null;
+  if (!name.trim() || !normalizedConfig?.apiKey) {
+    return buildFallbackCampaignSetupDraft(name, description);
+  }
+
+  try {
+    const prompt = buildCampaignSetupPrompt(name.trim(), description);
+    const raw = await callAI(prompt, normalizedConfig);
+    const parsed = extractJSON(raw);
+    const validation = CampaignSetupDraftSchema.safeParse(parsed);
+
+    if (validation.success) {
+      return {
+        ...validation.data,
+        generatedBy: "ai",
+      };
+    }
+  } catch (error) {
+    console.error("[AI] Campaign setup generation failed:", error);
+  }
+
+  return buildFallbackCampaignSetupDraft(name, description);
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────
 
 async function callAI(prompt: string, config: AIConfig): Promise<string> {
   let baseUrl = config.baseUrl;
   let headers: Record<string, string> = {
     "Content-Type": "application/json",
+  };
+  let endpoint = "/chat/completions";
+  let body: Record<string, unknown> = {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON.",
+      },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.7,
+    max_tokens: 800,
   };
 
   // Provider-specific routing and auth
@@ -323,7 +410,7 @@ async function callAI(prompt: string, config: AIConfig): Promise<string> {
       break;
     case "anthropic":
       // Anthropic requires a different header format than OpenAI-compatible proxies
-      // We'll use the official messages API format if we can, 
+      // We'll use the official messages API format if we can,
       // but for now we assume the user might be using a proxy if baseUrl is set.
       if (baseUrl) {
         headers["Authorization"] = `Bearer ${config.apiKey}`;
@@ -331,6 +418,13 @@ async function callAI(prompt: string, config: AIConfig): Promise<string> {
         baseUrl = "https://api.anthropic.com/v1";
         headers["x-api-key"] = config.apiKey;
         headers["anthropic-version"] = "2023-06-01";
+        endpoint = "/messages";
+        body = {
+          model: config.model,
+          max_tokens: 800,
+          system: "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON.",
+          messages: [{ role: "user", content: prompt }],
+        };
       }
       break;
     case "groq":
@@ -343,31 +437,30 @@ async function callAI(prompt: string, config: AIConfig): Promise<string> {
       break;
   }
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch(`${baseUrl}${endpoint}`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: "system",
-          content: "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 800,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    throw new Error(`AI API error: ${response.status} ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(
+      `AI API error: ${response.status} ${response.statusText}${errorText ? ` - ${errorText.slice(0, 400)}` : ""}`
+    );
+  }
+
+  if (config.provider === "anthropic" && !config.baseUrl) {
+    const data = (await response.json()) as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    return data.content?.find((entry) => entry.type === "text")?.text ?? "";
   }
 
   const data = (await response.json()) as {
-    choices: { message: { content: string } }[];
+    choices?: Array<{ message?: { content?: string } }>;
   };
-  return data.choices[0]?.message?.content ?? "";
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 function extractJSON(text: string): unknown | null {
@@ -404,4 +497,13 @@ function hashString(s: string): number {
     hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
   }
   return Math.abs(hash);
+}
+
+function normalizeAiConfig(config: AIConfig): AIConfig {
+  const fallbackModel = DEFAULT_MODELS[config.provider];
+  const migratedModel = DEPRECATED_MODEL_MIGRATIONS[config.model] ?? config.model ?? fallbackModel;
+  return {
+    ...config,
+    model: migratedModel || fallbackModel,
+  };
 }

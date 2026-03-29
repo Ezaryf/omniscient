@@ -4,6 +4,7 @@
  */
 
 import type { Agent, WorldState } from "@/lib/sim/types";
+import { getLocalCausalNeighborhood } from "@/lib/sim/causality";
 
 /**
  * Build a prompt for an agent's action proposal.
@@ -20,6 +21,11 @@ export function buildActionPrompt(
       (e) => e.sourceAgentId === agent.id || e.targetAgentId === agent.id
     )
     .slice(-5);
+  const causalNeighborhood = getLocalCausalNeighborhood(
+    worldState,
+    recentEvents.map((event) => event.id),
+    6
+  );
 
   return `You are simulating the decision-making of an agent in a multi-agent geopolitical simulation.
 
@@ -46,6 +52,18 @@ ${agent.goals
   .map((g) => `- ${g.label} (priority: ${g.priority}, progress: ${g.progress})`)
   .join("\n")}
 
+## Intent Continuity
+${agent.activeIntent
+  ? `- Active intent: ${agent.activeIntent.kind} toward ${agent.activeIntent.targetIds.join(", ") || "no direct target"}`
+  : "- Active intent: none"}
+${agent.activeIntent
+  ? `- Status: ${agent.activeIntent.status}, priority=${agent.activeIntent.priority.toFixed(2)}, commitment=${agent.activeIntent.commitment.toFixed(2)}`
+  : ""}
+${agent.activeIntent ? `- Rationale: ${agent.activeIntent.rationale}` : ""}
+${agent.intentHistory.length > 0
+  ? `- Prior intent: ${agent.intentHistory[agent.intentHistory.length - 1].kind} (${agent.intentHistory[agent.intentHistory.length - 1].status})`
+  : "- Prior intent: none"}
+
 ## Relationships
 ${agentRels
   .map((r) => {
@@ -58,6 +76,9 @@ ${agentRels
 
 ## Recent Events
 ${recentEvents.map((e) => `- [Tick ${e.tick}] ${e.description}`).join("\n") || "None"}
+
+## Local Causal Neighborhood
+${causalNeighborhood.map((e) => `- [Tick ${e.tick}] ${e.description}`).join("\n") || "None"}
 
 ## World Rules
 - Scarcity: ${worldState.rules.scarcity}
@@ -225,4 +246,74 @@ Respond with ONLY valid JSON matching this schema:
 }
 
 Ensure every agent in the list has a proposal.`;
+}
+
+export function buildSimulationDescriptionPrompt(name: string): string {
+  return `You are helping a GM name and pitch a dramatic campaign simulation.
+
+## Simulation Name
+${name}
+
+## Instructions
+Write a single evocative description for this simulation.
+- Make it cinematic, specific, and rich with tension.
+- It should feel like the opening blurb for a campaign scenario.
+- Keep it to 1 sentence, maximum 35 words.
+- Avoid generic product language like "branching fallout", "player-facing prep", or "campaign consequence simulation".
+- Do not mention the phrase "simulation".
+
+Respond with ONLY valid JSON:
+{
+  "description": "<one vivid sentence>"
+}`;
+}
+
+export function buildCampaignSetupPrompt(name: string, description?: string): string {
+  return `You are designing the opening setup for a GM-first campaign consequence engine.
+
+## Simulation Name
+${name}
+
+## Optional Description
+${description?.trim() || "None provided."}
+
+## Instructions
+Create a dramatic but playable starting setup for a campaign map.
+- Prioritize GM prep, pressure, routes, factions, and an inciting event.
+- Keep it grounded enough to run at the table, but vivid enough to feel cinematic.
+- Return 2-4 factions, 2-6 actors, 2-4 regions, 1-6 routes, 1-3 fronts, and one inciting event.
+- Each field should be concise and useful in a UI form.
+- IDs must be lowercase kebab-case strings.
+- Use only these region kinds: "homeland", "frontier", "wilds", "city-state", "sea".
+- Use only these faction temperaments: "diplomatic", "volatile", "pragmatic", "zealous", "cunning".
+- Use only valid event types from this list: "action", "reaction", "negotiation", "conflict", "trade", "alliance", "betrayal", "natural_event", "injected", "rule_change", "movement", "front_advance", "travel", "supply", "collapse".
+
+Respond with ONLY valid JSON:
+{
+  "title": "${name}",
+  "premise": "<1-2 sentence dramatic setup>",
+  "factions": [
+    { "id": "faction-example", "name": "Example", "identity": "<what they are>", "goal": "<what they want>", "temperament": "pragmatic" }
+  ],
+  "actors": [
+    { "id": "actor-example", "name": "Example", "type": "leader", "factionId": "faction-example", "role": "<campaign role>", "goal": "<personal goal>" }
+  ],
+  "regions": [
+    { "id": "region-example", "name": "Example Reach", "kind": "frontier", "controllingFactionId": "faction-example", "summary": "<why this matters>" }
+  ],
+  "routes": [
+    { "id": "route-example", "name": "Example Road", "fromRegionId": "region-example", "toRegionId": "region-other", "controllingFactionId": "faction-example", "risk": 0.35, "summary": "<why the route matters>" }
+  ],
+  "fronts": [
+    { "id": "front-example", "name": "Example vs Rival", "regionId": "region-example", "factionId": "faction-example", "opposingFactionId": "faction-rival", "stakes": "<what breaks if this escalates>", "pressure": 0.45, "progress": 0.3 }
+  ],
+  "incitingEvent": {
+    "type": "conflict",
+    "description": "<the first consequence>",
+    "regionId": "region-example",
+    "frontId": "front-example",
+    "routeIds": ["route-example"],
+    "stakes": "<what the GM should prep next>"
+  }
+}`;
 }
