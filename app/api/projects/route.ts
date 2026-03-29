@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStore, createDemoWorldState } from "@/lib/server/store";
+import { getStore, createBlankWorldState } from "@/lib/server/store";
 import { auth } from "@/lib/auth";
 import { hashState } from "@/lib/sim/hash";
+import { createSnapshot } from "@/lib/sim/snapshot";
+import { DEFAULT_RULES, DEFAULT_SEED } from "@/lib/sim/constants";
 
 /**
  * GET /api/projects — list all projects (demo mode returns the seeded project)
@@ -38,6 +40,8 @@ export async function POST(request: NextRequest) {
   }
 
   const projectId = `proj-${Date.now().toString(36)}`;
+  const scenarioId = `scen-${Date.now().toString(36)}`;
+  const branchId = `branch-${Date.now().toString(36)}`;
   const project = {
     id: projectId,
     ownerId: session.user.id,
@@ -48,24 +52,32 @@ export async function POST(request: NextRequest) {
   };
 
   await store.saveProject(project);
+  await store.saveScenario({
+    id: scenarioId,
+    projectId,
+    name: `${name} - Main Scenario`,
+    summary: description?.trim() || "A fresh campaign timeline waiting for its first consequence.",
+    seed: DEFAULT_SEED,
+    rules: { ...DEFAULT_RULES },
+  });
 
-  // Seed with demo state so the workspace is not empty
-  const worldState = createDemoWorldState();
-  const branchId = `branch-${Date.now().toString(36)}`;
+  const worldState = createBlankWorldState();
   
   await store.saveBranch({
     id: branchId,
     projectId,
-    scenarioId: "scen-demo",
+    scenarioId,
     parentBranchId: null,
     name: "Main Timeline",
-    summary: "The initial branch.",
+    summary: "The initial branch for this campaign.",
     branchPointTick: 0,
+    branchOriginEventId: null,
     currentTick: 0,
     latestState: worldState,
     stateHash: await hashState(worldState),
     status: "active",
   });
+  await store.saveSnapshot(await createSnapshot(branchId, worldState, "branch_point"));
 
   return NextResponse.json({ project, branchId }, { status: 201 });
 }

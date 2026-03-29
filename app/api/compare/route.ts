@@ -23,6 +23,12 @@ export async function GET(request: NextRequest) {
   }
 
   const store = getStore();
+  const ownsA = await store.checkBranchOwnership(branchAId, session.user.id);
+  const ownsB = await store.checkBranchOwnership(branchBId, session.user.id);
+  if (!ownsA || !ownsB) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const branchA = await store.getBranch(branchAId);
   const branchB = await store.getBranch(branchBId);
 
