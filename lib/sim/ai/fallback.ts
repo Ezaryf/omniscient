@@ -3,8 +3,9 @@
  * Uses goal priority + relationship state + traits to select actions.
  */
 
-import type { Agent, ActionProposal, RelationshipEdge } from "../types";
+import type { Agent, ActionProposal, RelationshipEdge, WorldState } from "../types";
 import { pickRandom, chance, randomInRange } from "../seed";
+import { buildProposalFromIntent, refreshAgentIntent } from "../intents";
 
 /**
  * Generate a fallback action proposal for an agent.
@@ -17,6 +18,34 @@ export function generateFallbackProposal(
   rng: () => number
 ): ActionProposal | null {
   if (agent.status !== "alive") return null;
+
+  const preparedState = {
+    tick: 0,
+    agents,
+    relationships,
+    campaignNodes: [],
+    boardLinks: [],
+    map: { id: "map", name: "Campaign Map", regions: [], sites: [], routes: [], tokens: [] },
+    fronts: [],
+    projections: [],
+    gmNotes: [],
+    events: [],
+    causalityGraph: { parentIdsByEventId: {}, childIdsByEventId: {}, depthByEventId: {} },
+    activeModifiers: [],
+    rules: {
+      scarcity: 0.5,
+      trustDecay: 0.01,
+      contagion: 0.25,
+      shockLikelihood: 0.1,
+      maxTicks: 100,
+      aiConfidenceFloor: 0.3,
+      scenarioIntensity: 0.5,
+    },
+    seed: 0,
+  } satisfies WorldState;
+  const preparedAgent = refreshAgentIntent(agent, preparedState, rng);
+  const intentProposal = buildProposalFromIntent(preparedAgent, { ...preparedState, agents: agents.map((entry) => entry.id === agent.id ? preparedAgent : entry) }, rng);
+  if (intentProposal) return intentProposal;
 
   const activeGoals = agent.goals.filter((g) => g.status === "active");
   if (activeGoals.length === 0) return null;

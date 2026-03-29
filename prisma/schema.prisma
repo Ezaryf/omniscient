@@ -92,6 +92,7 @@ model Branch {
   name             String
   summary          String
   branchPointTick  Int
+  branchOriginEventId String?
   currentTick      Int
   stateHash        String
   status           String
@@ -102,6 +103,9 @@ model Branch {
   snapshots        Snapshot[]
   narratives       NarrativeSummary[]
   proposals        ProposalLedger[]
+  mapState         CampaignMapState?
+  frontStates      FrontClockState[]
+  gmNotes          GmNote[]
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 }
@@ -165,9 +169,17 @@ model Event {
   type          String
   sourceAgentId String?
   targetAgentId String?
+  actorIds      Json
+  targetIds     Json
   description   String
   impact        Json
   causeChain    Json
+  causedBy      Json
+  affects       Json
+  invalidates   Json
+  branchOriginEventId String?
+  confidence    Float    @default(0.7)
+  tags          Json
   metadata      Json
   createdAt     DateTime @default(now())
 
@@ -214,4 +226,44 @@ model ProposalLedger {
   createdAt DateTime @default(now())
 
   @@unique([branchId, tick])
+}
+
+model CampaignMapState {
+  id        String   @id @default(cuid())
+  branchId  String   @unique
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  state     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FrontClockState {
+  id        String   @id @default(cuid())
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  frontId   String
+  name      String
+  state     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId, frontId])
+}
+
+model GmNote {
+  id            String   @id @default(cuid())
+  branchId       String
+  branch         Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tick           Int
+  title          String
+  content        String
+  linkedEventId  String?
+  linkedRegionId String?
+  linkedSiteId   String?
+  linkedFrontId  String?
+  status         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([branchId, tick])
 }

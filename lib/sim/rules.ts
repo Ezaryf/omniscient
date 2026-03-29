@@ -1,22 +1,14 @@
-/**
- * Rule evaluation engine.
- * Applies scarcity, trust decay, contagion, and shock events.
- */
-
 import type {
   Agent,
-  WorldState,
-  SimEvent,
-  RuleSet,
   EventImpact,
   Modifier,
+  RuleSet,
+  WorldState,
 } from "./types";
 import { chance, pickRandom, randomInRange } from "./seed";
 import { clamp } from "./relationships";
+import { createCausalEvent } from "./campaign";
 
-/**
- * Apply scarcity pressure: reduce resources proportional to scarcity level.
- */
 export function applyScarcity(
   agents: Agent[],
   rules: RuleSet,
@@ -32,86 +24,71 @@ export function applyScarcity(
       resources[key] = Math.max(0, resources[key] - resources[key] * drain);
     }
 
-    const moraleDrain = rules.scarcity * 0.02;
     return {
       ...agent,
       resources,
       state: {
         ...agent.state,
-        morale: clamp(agent.state.morale - moraleDrain, 0, 1),
+        morale: clamp(agent.state.morale - rules.scarcity * 0.02, 0, 1),
       },
     };
   });
 }
 
-/**
- * Generate random shock events based on shockLikelihood.
- */
 export function generateShockEvents(
   worldState: WorldState,
   rng: () => number
-): SimEvent[] {
-  const events: SimEvent[] = [];
-
+) {
   if (!chance(worldState.rules.shockLikelihood, rng)) {
-    return events;
+    return [];
   }
 
-  const shockTypes = [
-    "natural_event",
-    "conflict",
-    "trade",
-  ] as const;
-
-  const shockType = pickRandom(shockTypes, rng);
-  const aliveAgents = worldState.agents.filter((a) => a.status === "alive");
-
-  if (aliveAgents.length === 0) return events;
+  const aliveAgents = worldState.agents.filter((agent) => agent.status === "alive");
+  if (aliveAgents.length === 0) return [];
 
   const target = pickRandom(aliveAgents, rng);
   const severity = randomInRange(0.1, 0.5, rng);
+  const shockType = pickRandom(["natural_event", "conflict", "trade"] as const, rng);
 
   const impacts: EventImpact[] = [
-    { targetId: target.id, field: "morale", delta: -severity * 0.3 },
-    { targetId: target.id, field: "wealth", delta: -severity * 20 },
+    { targetId: target.id, targetKind: "agent", field: "morale", delta: -severity * 0.3 },
+    { targetId: target.id, targetKind: "agent", field: "wealth", delta: -severity * 20 },
   ];
 
-  const descriptions: Record<string, string[]> = {
+  const descriptions: Record<typeof shockType, string[]> = {
     natural_event: [
-      `A devastating flood struck ${target.name}'s territory`,
-      `Drought ravages ${target.name}'s farmlands`,
-      `An earthquake disrupts ${target.name}'s operations`,
+      `A flood swallows the roads near ${target.name}'s territory`,
+      `A drought withers the stores feeding ${target.name}'s people`,
+      `An earthquake destabilizes ${target.name}'s power base`,
     ],
     conflict: [
-      `Border skirmish erupts near ${target.name}'s stronghold`,
-      `Rebels challenge ${target.name}'s authority`,
-      `Mercenary raid targets ${target.name}'s supply lines`,
+      `A border raid erupts near ${target.name}'s sphere of control`,
+      `Rebels challenge ${target.name}'s authority in the frontier`,
+      `Mercenaries strike ${target.name}'s supply chain`,
     ],
     trade: [
-      `${target.name}'s primary trade route collapses`,
-      `A market crash hits ${target.name}'s economy`,
-      `Essential supply shortage affects ${target.name}`,
+      `${target.name}'s trade web snaps under sudden pressure`,
+      `A market collapse undercuts ${target.name}'s treasury`,
+      `A caravan shortage isolates ${target.name}'s allies`,
     ],
   };
 
-  events.push({
-    id: `shock-${worldState.tick}-${rng().toString(36).slice(2, 8)}`,
-    tick: worldState.tick,
-    type: shockType,
-    sourceAgentId: null,
-    targetAgentId: target.id,
-    description: pickRandom(descriptions[shockType], rng),
-    impact: impacts,
-    causeChain: ["random_shock"],
-    metadata: { severity, shockType },
-  });
-
-  return events;
+  return [
+    createCausalEvent(worldState, {
+      tick: worldState.tick,
+      type: shockType,
+      description: pickRandom(descriptions[shockType], rng),
+      targetAgentId: target.id,
+      targetIds: [target.id],
+      impact: impacts,
+      confidence: 0.88,
+      tags: [shockType, "shock", target.factionId],
+      metadata: { severity, shockType },
+      sequence: 80,
+    }),
+  ];
 }
 
-/**
- * Apply event impacts to agents.
- */
 export function applyEventImpacts(
   agents: Agent[],
   impacts: EventImpact[],
@@ -119,6 +96,7 @@ export function applyEventImpacts(
 ): Agent[] {
   const impactMap = new Map<string, EventImpact[]>();
   for (const impact of impacts) {
+    if (impact.targetKind !== "agent") continue;
     const existing = impactMap.get(impact.targetId) ?? [];
     existing.push(impact);
     impactMap.set(impact.targetId, existing);
@@ -128,16 +106,12 @@ export function applyEventImpacts(
     const agentImpacts = impactMap.get(agent.id);
     if (!agentImpacts && activeModifiers.length === 0) return agent;
 
-    let updatedAgent = { ...agent };
-    
-    // 1. Process explicit impacts
-    if (agentImpacts) {
-      for (const impact of agentImpacts) {
-        updatedAgent = applyImpactWithModifiers(updatedAgent, impact, activeModifiers);
-      }
+    let updated = { ...agent };
+    for (const impact of agentImpacts ?? []) {
+      updated = applyImpactWithModifiers(updated, impact, activeModifiers);
     }
 
-    return updatedAgent;
+    return updated;
   });
 }
 
@@ -148,13 +122,12 @@ function applyImpactWithModifiers(
 ): Agent {
   let delta = impact.delta;
 
-  // Apply relevant modifiers
-  for (const mod of modifiers) {
-    const isGlobal = mod.type === "global";
-    const isTargetFaction = mod.type === "faction" && mod.targetId === agent.factionId;
+  for (const modifier of modifiers) {
+    const globalMatch = modifier.type === "global";
+    const factionMatch = modifier.type === "faction" && modifier.targetId === agent.factionId;
 
-    if ((isGlobal || isTargetFaction) && mod.field === impact.field) {
-      delta = delta * mod.multiplier + mod.offset;
+    if ((globalMatch || factionMatch) && modifier.field === impact.field) {
+      delta = delta * modifier.multiplier + modifier.offset;
     }
   }
 
@@ -163,28 +136,27 @@ function applyImpactWithModifiers(
 
 function applyImpactToAgent(agent: Agent, impact: EventImpact): Agent {
   const stateFields = ["health", "morale", "influence", "wealth"];
-  const field = impact.field;
 
-  if (stateFields.includes(field)) {
-    const key = field as keyof typeof agent.state;
-    const current = agent.state[key];
+  if (stateFields.includes(impact.field)) {
+    const key = impact.field as keyof typeof agent.state;
     const min = key === "health" || key === "morale" ? 0 : -Infinity;
     const max = key === "health" || key === "morale" ? 1 : Infinity;
+
     return {
       ...agent,
       state: {
         ...agent.state,
-        [key]: clamp(current + impact.delta, min, max),
+        [key]: clamp(agent.state[key] + impact.delta, min, max),
       },
     };
   }
 
-  if (field in agent.resources) {
+  if (impact.field in agent.resources) {
     return {
       ...agent,
       resources: {
         ...agent.resources,
-        [field]: Math.max(0, agent.resources[field] + impact.delta),
+        [impact.field]: Math.max(0, agent.resources[impact.field] + impact.delta),
       },
     };
   }
@@ -192,9 +164,6 @@ function applyImpactToAgent(agent: Agent, impact: EventImpact): Agent {
   return agent;
 }
 
-/**
- * Check if an agent should die (health <= 0) or become inactive.
- */
 export function checkAgentStatus(agents: Agent[]): Agent[] {
   return agents.map((agent) => {
     if (agent.status !== "alive") return agent;
@@ -208,9 +177,6 @@ export function checkAgentStatus(agents: Agent[]): Agent[] {
   });
 }
 
-/**
- * Validate that a rule change doesn't produce invalid state.
- */
 export function validateRuleChange(
   patch: Partial<RuleSet>
 ): { valid: boolean; errors: string[] } {
@@ -231,7 +197,10 @@ export function validateRuleChange(
   if (patch.maxTicks !== undefined && patch.maxTicks < 1) {
     errors.push("maxTicks must be positive");
   }
-  if (patch.aiConfidenceFloor !== undefined && (patch.aiConfidenceFloor < 0 || patch.aiConfidenceFloor > 1)) {
+  if (
+    patch.aiConfidenceFloor !== undefined &&
+    (patch.aiConfidenceFloor < 0 || patch.aiConfidenceFloor > 1)
+  ) {
     errors.push("aiConfidenceFloor must be between 0 and 1");
   }
 

@@ -1,26 +1,23 @@
-import type { WorldState, Snapshot, SimEvent } from "./types";
+import { applyCausalConsequences, ensureWorldState } from "./campaign";
 import { hashState } from "./hash";
+import { applyEventImpacts } from "./rules";
+import type { Snapshot, SimEvent, WorldState } from "./types";
 
-/**
- * Limit for snapshots per branch to prevent memory exhaustion.
- */
 export const MAX_SNAPSHOTS_PER_BRANCH = 10;
 
-/**
- * Create a snapshot of the current world state.
- */
 export async function createSnapshot(
   branchId: string,
   worldState: WorldState,
   kind: Snapshot["kind"]
 ): Promise<Snapshot> {
-  const stateClone = structuredClone(worldState);
+  const normalized = ensureWorldState(worldState);
+  const stateClone = structuredClone(normalized);
   const stateHash = await hashState(stateClone);
 
   return {
-    id: `snap-${branchId}-${worldState.tick}-${Date.now().toString(36)}`,
+    id: `snap-${branchId}-${normalized.tick}-${Date.now().toString(36)}`,
     branchId,
-    tick: worldState.tick,
+    tick: normalized.tick,
     kind,
     stateHash,
     state: stateClone,
@@ -28,113 +25,49 @@ export async function createSnapshot(
   };
 }
 
-/**
- * Restore world state from a snapshot.
- */
 export function restoreFromSnapshot(snapshot: Snapshot): WorldState {
-  return structuredClone(snapshot.state);
+  return ensureWorldState(structuredClone(snapshot.state));
 }
 
-/**
- * Replay events from a starting state to reconstruct a later state.
- * This applies each event's impacts sequentially.
- */
-export function replayEvents(
-  startState: WorldState,
-  events: SimEvent[]
-): WorldState {
-  let state = structuredClone(startState);
-
-  const sortedEvents = [...events].sort((a, b) => a.tick - b.tick);
+export function replayEvents(startState: WorldState, events: SimEvent[]): WorldState {
+  let state = ensureWorldState(startState);
+  const sortedEvents = [...events].sort((left, right) => left.tick - right.tick);
 
   for (const event of sortedEvents) {
-    state = applyEventToState(state, event);
+    state = {
+      ...state,
+      tick: Math.max(state.tick, event.tick),
+      agents: applyEventImpacts(state.agents, event.impact),
+      events: [...state.events, event].slice(-200),
+    };
+    state = applyCausalConsequences(state, event);
+    state = ensureWorldState(state);
   }
 
   return state;
 }
 
-/**
- * Apply a single event to world state.
- */
-function applyEventToState(state: WorldState, event: SimEvent): WorldState {
-  const agents = state.agents.map((agent) => {
-    const agentImpacts = event.impact.filter((i) => i.targetId === agent.id);
-    if (agentImpacts.length === 0) return agent;
-
-    let updated = { ...agent };
-    for (const impact of agentImpacts) {
-      updated = applyImpact(updated, impact);
-    }
-    return updated;
-  });
-
-  return {
-    ...state,
-    agents,
-    events: [...state.events, event],
-    tick: Math.max(state.tick, event.tick),
-  };
-}
-
-function applyImpact(
-  agent: WorldState["agents"][number],
-  impact: { field: string; delta: number }
-): WorldState["agents"][number] {
-  const stateKeys = ["health", "morale", "influence", "wealth"];
-
-  if (stateKeys.includes(impact.field)) {
-    const key = impact.field as keyof typeof agent.state;
-    return {
-      ...agent,
-      state: {
-        ...agent.state,
-        [key]: agent.state[key] + impact.delta,
-      },
-    };
-  }
-
-  if (impact.field in agent.resources) {
-    return {
-      ...agent,
-      resources: {
-        ...agent.resources,
-        [impact.field]: Math.max(
-          0,
-          agent.resources[impact.field] + impact.delta
-        ),
-      },
-    };
-  }
-
-  return agent;
-}
-
-/**
- * Find the nearest snapshot at or before a given tick.
- */
 export function findNearestSnapshot(
   snapshots: Snapshot[],
   tick: number
 ): Snapshot | null {
-  const candidates = snapshots.filter((s) => s.tick <= tick);
+  const candidates = snapshots.filter((snapshot) => snapshot.tick <= tick);
   if (candidates.length === 0) return null;
 
-  candidates.sort((a, b) => b.tick - a.tick);
+  candidates.sort((left, right) => right.tick - left.tick);
   return candidates[0];
 }
 
-/**
- * Prune snapshots for a branch, keeping only the most recent ones.
- * Returns the IDs of snapshots that should be deleted.
- */
 export function getSnapshotsToPrune(
   snapshots: Snapshot[],
   branchId: string
 ): string[] {
   const branchSnapshots = snapshots
-    .filter((s) => s.branchId === branchId)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    .filter((snapshot) => snapshot.branchId === branchId)
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    );
 
   if (branchSnapshots.length <= MAX_SNAPSHOTS_PER_BRANCH) {
     return [];
@@ -142,5 +75,5 @@ export function getSnapshotsToPrune(
 
   return branchSnapshots
     .slice(MAX_SNAPSHOTS_PER_BRANCH)
-    .map((s) => s.id);
+    .map((snapshot) => snapshot.id);
 }

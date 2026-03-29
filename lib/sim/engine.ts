@@ -1,463 +1,456 @@
-/**
- * Core simulation engine — the tick function.
- * Pure, deterministic state transitions.
- * tick(worldState, rng) → TickResult
- */
-
 import type {
-  WorldState,
-  TickResult,
-  SimEvent,
-  Agent,
   ActionProposal,
+  Agent,
   AgentMemoryEntry,
+  CausalEvent,
   Modifier,
+  TickResult,
+  WorldState,
 } from "./types";
 import { SNAPSHOT_FREQUENCY } from "./constants";
 import { chance, pickRandom, randomInRange } from "./seed";
 import {
+  applyCausalConsequences,
+  createCausalEvent,
+  ensureWorldState,
+  findRegionForAgent,
+} from "./campaign";
+import {
   applyTrustDecay,
+  clamp,
   propagateContagion,
   updateRelationship,
-  getAgentRelationships,
 } from "./relationships";
 import {
-  applyScarcity,
-  generateShockEvents,
   applyEventImpacts,
+  applyScarcity,
   checkAgentStatus,
+  generateShockEvents,
 } from "./rules";
+import { buildProposalFromIntent, refreshAgentIntents } from "./intents";
 
-/**
- * Execute one simulation tick.
- * This is the core game loop step — fully deterministic given the same inputs.
- *
- * @param worldState  Current world state (immutable — new state is returned)
- * @param rng         Seeded random number generator
- * @param aiProposals Optional AI-generated action proposals for this tick
- * @returns TickResult with new world state, generated events, and proposals used
- */
 export function tick(
   worldState: WorldState,
   rng: () => number,
   aiProposals?: ActionProposal[]
 ): TickResult {
-  const newTick = worldState.tick + 1;
-  const events: SimEvent[] = [];
+  const normalized = ensureWorldState(worldState);
+  const newTick = normalized.tick + 1;
+  const events: CausalEvent[] = [];
   const usedProposals: ActionProposal[] = [];
 
-  // 1. Apply trust decay and contagion
   let relationships = applyTrustDecay(
-    worldState.relationships,
-    worldState.rules,
+    normalized.relationships,
+    normalized.rules,
     newTick
   );
-  relationships = propagateContagion(relationships, worldState.rules, newTick);
+  relationships = propagateContagion(relationships, normalized.rules, newTick);
 
-  // 2. Apply scarcity pressure
-  let agents = applyScarcity(worldState.agents, worldState.rules, rng);
+  const agents = applyScarcity(normalized.agents, normalized.rules, rng);
+  const nextModifiers = normalized.activeModifiers
+    .map((modifier) => ({
+      ...modifier,
+      remainingTicks: modifier.remainingTicks - 1,
+    }))
+    .filter((modifier) => modifier.remainingTicks > 0);
 
-  // 3. Process AI proposals or generate heuristic actions
-  const proposals = aiProposals ?? generateHeuristicActions(agents, relationships, rng);
-  for (const proposal of proposals) {
-    const result = resolveProposal(proposal, agents, relationships, newTick, rng);
-    agents = result.agents;
+  let eventContext = ensureWorldState({
+    ...normalized,
+    tick: newTick,
+    agents,
+    relationships,
+    activeModifiers: nextModifiers,
+  });
+  eventContext = refreshAgentIntents(eventContext, rng);
+
+  const proposals =
+    aiProposals ?? generateHeuristicActions(eventContext, rng);
+
+  for (const [sequence, proposal] of proposals.entries()) {
+    const result = resolveProposal(proposal, eventContext, newTick, sequence, rng);
     relationships = result.relationships;
+    eventContext = ensureWorldState({
+      ...eventContext,
+      relationships,
+      events: [...eventContext.events, ...result.events].slice(-160),
+    });
     events.push(...result.events);
     usedProposals.push(proposal);
   }
 
-  // 4. Generate shock events
-  const shockState: WorldState = {
-    ...worldState,
-    tick: newTick,
-    agents,
-    relationships,
-  };
-  const shocks = generateShockEvents(shockState, rng);
-  events.push(...shocks);
+  const shocks = generateShockEvents(eventContext, rng);
+  if (shocks.length > 0) {
+    events.push(...shocks);
+    eventContext = ensureWorldState({
+      ...eventContext,
+      events: [...eventContext.events, ...shocks].slice(-160),
+    });
+  }
 
-  // 5. Apply all event impacts
-  const allImpacts = events.flatMap((e) => e.impact);
-  agents = applyEventImpacts(agents, allImpacts, worldState.activeModifiers);
-
-  // 6. Check agent status (death, inactivity)
-  agents = checkAgentStatus(agents);
-
-  // 7. Record events in agent memory
-  agents = recordMemories(agents, events, newTick);
-
-  // 8. Update & Prune Modifiers
-  const nextModifiers = worldState.activeModifiers
-    .map(m => ({ ...m, remainingTicks: m.remainingTicks - 1 }))
-    .filter(m => m.remainingTicks > 0);
-
-  // 9. Random World Shocks
-  if (chance(worldState.rules.shockLikelihood, rng)) {
-    const shock = createRandomShock(agents, worldState.rules, newTick, rng);
+  if (chance(normalized.rules.shockLikelihood, rng)) {
+    const shock = createRandomShock(eventContext, newTick, rng);
     if (shock) {
       nextModifiers.push(shock.modifier);
       events.push(shock.event);
+      eventContext = ensureWorldState({
+        ...eventContext,
+        activeModifiers: nextModifiers,
+        events: [...eventContext.events, shock.event].slice(-160),
+      });
     }
   }
 
-  // 10. Build new world state
-  const newState: WorldState = {
-    tick: newTick,
-    agents,
-    relationships,
-    events: [...worldState.events, ...events].slice(-50),
+  let finalState = ensureWorldState({
+    ...eventContext,
     activeModifiers: nextModifiers,
-    rules: worldState.rules,
-    seed: worldState.seed,
+    events: [...normalized.events].slice(-160),
+  });
+
+  finalState = {
+    ...finalState,
+    agents: applyEventImpacts(finalState.agents, events.flatMap((event) => event.impact), normalized.activeModifiers),
   };
+  finalState = {
+    ...finalState,
+    agents: checkAgentStatus(finalState.agents),
+  };
+  finalState = {
+    ...finalState,
+    agents: recordMemories(finalState.agents, events, newTick),
+  };
+  finalState = refreshAgentIntents(finalState, rng);
+
+  for (const event of events) {
+    finalState = ensureWorldState({
+      ...finalState,
+      events: [...finalState.events, event].slice(-160),
+    });
+    finalState = applyCausalConsequences(finalState, event);
+  }
+
+  finalState = ensureWorldState({
+    ...finalState,
+    tick: newTick,
+    relationships,
+    activeModifiers: nextModifiers,
+  });
 
   return {
-    worldState: newState,
+    worldState: finalState,
     events,
     proposals: usedProposals,
     snapshotCreated: newTick % SNAPSHOT_FREQUENCY === 0,
   };
 }
 
-/**
- * Generate heuristic actions for all living agents when AI is unavailable.
- * Uses goal priorities, traits, and relationship state to pick actions.
- */
 function generateHeuristicActions(
-  agents: Agent[],
-  relationships: WorldState["relationships"],
+  worldState: WorldState,
   rng: () => number
 ): ActionProposal[] {
   const proposals: ActionProposal[] = [];
-  const aliveAgents = agents.filter((a) => a.status === "alive");
+  const aliveAgents = worldState.agents.filter((agent) => agent.status === "alive");
 
   for (const agent of aliveAgents) {
-    // Not every agent acts every tick
-    if (!chance(0.6, rng)) continue;
-
-    const agentRels = getAgentRelationships(relationships, agent.id);
-    const topGoal = [...agent.goals]
-      .filter((g) => g.status === "active")
-      .sort((a, b) => b.priority - a.priority)[0];
-
-    if (!topGoal) continue;
-
-    const proposal = generateAgentAction(
-      agent,
-      agentRels,
-      aliveAgents,
-      topGoal,
-      rng
-    );
+    if (!chance(0.62, rng)) continue;
+    const proposal = buildProposalFromIntent(agent, worldState, rng);
     if (proposal) proposals.push(proposal);
   }
 
   return proposals;
 }
 
-function generateAgentAction(
-  agent: Agent,
-  relationships: WorldState["relationships"],
-  allAgents: Agent[],
-  topGoal: Agent["goals"][number],
-  rng: () => number
-): ActionProposal | null {
-  const otherAgents = allAgents.filter((a) => a.id !== agent.id);
-  if (otherAgents.length === 0) return null;
-
-  const target = pickRandom(otherAgents, rng);
-  const rel = relationships.find(
-    (r) =>
-      (r.sourceAgentId === agent.id && r.targetAgentId === target.id) ||
-      (r.targetAgentId === agent.id && r.sourceAgentId === target.id)
-  );
-
-  const trust = rel?.trust ?? 0;
-  const tension = rel?.tension ?? 0.5;
-
-  // Decide action type based on traits and relationship
-  let actionType: ActionProposal["actionType"];
-
-  if (agent.traits.aggression > 0.7 && tension > 0.5) {
-    actionType = chance(0.6, rng) ? "attack" : "defend";
-  } else if (agent.traits.diplomacy > 0.6 && trust > 0) {
-    actionType = chance(0.5, rng) ? "negotiate" : "ally";
-  } else if (agent.traits.resourcefulness > 0.6) {
-    actionType = chance(0.5, rng) ? "trade" : "gather";
-  } else if (tension > 0.7 && trust < -0.3) {
-    actionType = "betray";
-  } else {
-    const fallbackActions: ActionProposal["actionType"][] = [
-      "explore",
-      "rest",
-      "gather",
-      "negotiate",
-    ];
-    actionType = pickRandom(fallbackActions, rng);
-  }
-
-  return {
-    agentId: agent.id,
-    actionType,
-    targetAgentId: target.id,
-    rationale: `Pursuing "${topGoal.label}" — ${actionType} toward ${target.name}`,
-    confidence: randomInRange(0.4, 0.9, rng),
-  };
-}
-
-/**
- * Resolve an action proposal into state changes and events.
- */
 function resolveProposal(
   proposal: ActionProposal,
-  agents: Agent[],
-  relationships: WorldState["relationships"],
+  state: WorldState,
   tick: number,
+  sequence: number,
   rng: () => number
 ): {
-  agents: Agent[];
   relationships: WorldState["relationships"];
-  events: SimEvent[];
+  events: CausalEvent[];
 } {
-  const events: SimEvent[] = [];
-  let updatedRelationships = [...relationships];
-
-  // Find the interacting agents
-  const sourceIndex = agents.findIndex((a) => a.id === proposal.agentId);
-  if (sourceIndex === -1) return { agents, relationships: updatedRelationships, events };
-  
-  const source = agents[sourceIndex];
-
-  let targetIndex = -1;
-  let target: Agent | null = null;
-  if (proposal.targetAgentId) {
-    targetIndex = agents.findIndex((a) => a.id === proposal.targetAgentId);
-    if (targetIndex !== -1) {
-      target = agents[targetIndex];
-      // Ghost Interaction check: If target is dead or health <= 0, abort targeting
-      if (target.status === "dead" || target.state.health <= 0) {
-        target = null;
-      }
-    }
+  const source = state.agents.find((agent) => agent.id === proposal.agentId);
+  if (!source) {
+    return { relationships: state.relationships, events: [] };
   }
 
-  // If the action originally required a target but the target died in-tick, fallback to rest
+  let target = proposal.targetAgentId
+    ? state.agents.find((agent) => agent.id === proposal.targetAgentId) ?? null
+    : null;
+
+  if (target && (target.status === "dead" || target.state.health <= 0)) {
+    target = null;
+  }
+
   const originalAction = proposal.actionType;
-  const isTargetRequired = ["attack", "trade", "negotiate", "ally", "betray"].includes(originalAction);
-  const actualAction = isTargetRequired && !target ? "rest" : originalAction;
+  const targetRequired = ["attack", "trade", "negotiate", "ally", "betray"].includes(originalAction);
+  const actionType = targetRequired && !target ? "rest" : originalAction;
+  const effects = getActionEffects(actionType, rng);
+  const sourceRegion = findRegionForAgent(state.map, source);
+  const targetRegion = target ? findRegionForAgent(state.map, target) : null;
 
-  const actionEffects = getActionEffects(actualAction, rng);
-
-  // Build the event
-  const actionVerbs: Record<string, string> = {
-    attack: "attacks",
-    defend: "defends against",
-    trade: "trades with",
-    explore: "explores near",
-    gather: "gathers resources near",
+  const verbMap: Record<ActionProposal["actionType"], string> = {
+    attack: "strikes",
+    defend: "fortifies against",
+    trade: "opens trade with",
+    explore: "scouts",
+    gather: "secures resources around",
     negotiate: "negotiates with",
-    ally: "allies with",
+    ally: "forms an accord with",
     betray: "betrays",
-    rest: "rests near",
+    retreat: "withdraws from",
+    rest: "regroups in",
   };
-  const verb = actionVerbs[actualAction] || `${actualAction}s`;
 
-  const event: SimEvent = {
-    id: `evt-${tick}-${proposal.agentId.slice(-4)}-${rng().toString(36).substring(2, 6)}`,
-    tick,
-    type: mapActionToEventType(actualAction),
-    sourceAgentId: proposal.agentId,
-    targetAgentId: target ? target.id : null,
-    description: `${source.name} ${verb}${target ? " " + target.name : ""}`,
-    impact: actionEffects.impacts.map((i) => ({
-      ...i,
-      targetId: i.targetId === "source" ? source.id : (target?.id ?? source.id),
-    })),
-    causeChain: [proposal.rationale],
-    metadata: {
-      proposalConfidence: proposal.confidence,
-      generatedBy: "heuristic",
-      ...(actualAction !== originalAction && { note: `Fallback from ${originalAction} due to dead target` })
-    },
-  };
-  events.push(event);
+  const subject = target?.name ?? sourceRegion?.name ?? "the region";
+  const description = `${source.name} ${verbMap[actionType]} ${subject}`.trim();
 
-  // Update relationships
+  let relationships = [...state.relationships];
   if (target) {
-    const relIdx = updatedRelationships.findIndex(
-      (r) =>
-        (r.sourceAgentId === source.id && r.targetAgentId === target.id) ||
-        (r.sourceAgentId === target.id && r.targetAgentId === source.id)
+    const index = relationships.findIndex(
+      (entry) =>
+        (entry.sourceAgentId === source.id && entry.targetAgentId === target.id) ||
+        (entry.sourceAgentId === target.id && entry.targetAgentId === source.id)
     );
-    if (relIdx >= 0) {
-      updatedRelationships[relIdx] = updateRelationship(
-        updatedRelationships[relIdx],
-        actionEffects.relationshipDelta,
+
+    if (index >= 0) {
+      relationships[index] = updateRelationship(
+        relationships[index],
+        effects.relationshipDelta,
         tick
       );
     }
   }
 
-  return { agents, relationships: updatedRelationships, events };
+  const event = createCausalEvent(state, {
+    tick,
+    type: mapActionToEventType(actionType),
+    description,
+    sourceAgentId: source.id,
+    targetAgentId: target?.id ?? null,
+    impact: effects.impacts.map((impact) => ({
+      ...impact,
+      targetId:
+        impact.targetId === "source"
+          ? source.id
+          : impact.targetId === "target" && target
+            ? target.id
+            : source.id,
+    })),
+    confidence: proposal.confidence,
+    tags: uniqueTags([
+      actionType,
+      source.factionId,
+      target?.factionId,
+      sourceRegion?.id,
+      targetRegion?.id,
+    ]),
+    metadata: {
+      generatedBy: "heuristic",
+      proposalConfidence: proposal.confidence,
+      rationale: proposal.rationale,
+      sequence,
+      originalAction,
+      fallbackApplied: actionType !== originalAction,
+    },
+    sequence,
+  });
+
+  return {
+    relationships,
+    events: [event],
+  };
+}
+
+function uniqueTags(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
 }
 
 function getActionEffects(
   actionType: ActionProposal["actionType"],
   rng: () => number
 ): {
-  impacts: { targetId: string; field: string; delta: number }[];
+  impacts: Array<{ targetId: "source" | "target"; targetKind: "agent"; field: string; delta: number }>;
   relationshipDelta: { trust?: number; influence?: number; tension?: number };
 } {
-  const mag = randomInRange(0.05, 0.15, rng);
+  const magnitude = randomInRange(0.05, 0.15, rng);
 
-  const effectsMap: Record<
+  const effects: Record<
     ActionProposal["actionType"],
-    ReturnType<typeof getActionEffects>
+    {
+      impacts: Array<{ targetId: "source" | "target"; targetKind: "agent"; field: string; delta: number }>;
+      relationshipDelta: { trust?: number; influence?: number; tension?: number };
+    }
   > = {
     negotiate: {
-      impacts: [{ targetId: "source", field: "influence", delta: mag * 5 }],
-      relationshipDelta: { trust: mag, tension: -mag * 0.5 },
+      impacts: [{ targetId: "source", targetKind: "agent", field: "influence", delta: magnitude * 5 }],
+      relationshipDelta: { trust: magnitude, tension: -magnitude * 0.5 },
     },
     attack: {
       impacts: [
-        { targetId: "target", field: "health", delta: -mag },
-        { targetId: "source", field: "morale", delta: mag * 0.5 },
+        { targetId: "target", targetKind: "agent", field: "health", delta: -magnitude },
+        { targetId: "source", targetKind: "agent", field: "morale", delta: magnitude * 0.45 },
       ],
-      relationshipDelta: { trust: -mag * 2, tension: mag },
+      relationshipDelta: { trust: -magnitude * 2, tension: magnitude },
     },
     defend: {
-      impacts: [{ targetId: "source", field: "morale", delta: mag * 0.3 }],
-      relationshipDelta: { tension: -mag * 0.3 },
+      impacts: [{ targetId: "source", targetKind: "agent", field: "morale", delta: magnitude * 0.3 }],
+      relationshipDelta: { tension: -magnitude * 0.3 },
     },
     trade: {
       impacts: [
-        { targetId: "source", field: "wealth", delta: mag * 10 },
-        { targetId: "target", field: "wealth", delta: mag * 8 },
+        { targetId: "source", targetKind: "agent", field: "wealth", delta: magnitude * 10 },
+        { targetId: "target", targetKind: "agent", field: "wealth", delta: magnitude * 8 },
       ],
-      relationshipDelta: { trust: mag * 0.5, tension: -mag * 0.2 },
+      relationshipDelta: { trust: magnitude * 0.5, tension: -magnitude * 0.2 },
     },
     ally: {
-      impacts: [{ targetId: "source", field: "influence", delta: mag * 3 }],
-      relationshipDelta: { trust: mag * 1.5, influence: mag, tension: -mag },
+      impacts: [{ targetId: "source", targetKind: "agent", field: "influence", delta: magnitude * 3 }],
+      relationshipDelta: { trust: magnitude * 1.5, influence: magnitude, tension: -magnitude },
     },
     betray: {
       impacts: [
-        { targetId: "target", field: "morale", delta: -mag * 2 },
-        { targetId: "source", field: "wealth", delta: mag * 15 },
+        { targetId: "target", targetKind: "agent", field: "morale", delta: -magnitude * 2 },
+        { targetId: "source", targetKind: "agent", field: "wealth", delta: magnitude * 15 },
       ],
-      relationshipDelta: { trust: -mag * 3, tension: mag * 2 },
+      relationshipDelta: { trust: -magnitude * 3, tension: magnitude * 2 },
     },
     retreat: {
-      impacts: [{ targetId: "source", field: "morale", delta: -mag * 0.5 }],
-      relationshipDelta: { tension: -mag * 0.5 },
+      impacts: [{ targetId: "source", targetKind: "agent", field: "morale", delta: -magnitude * 0.5 }],
+      relationshipDelta: { tension: -magnitude * 0.45 },
     },
     gather: {
-      impacts: [{ targetId: "source", field: "wealth", delta: mag * 12 }],
+      impacts: [{ targetId: "source", targetKind: "agent", field: "wealth", delta: magnitude * 12 }],
       relationshipDelta: {},
     },
     explore: {
-      impacts: [{ targetId: "source", field: "influence", delta: mag * 2 }],
+      impacts: [{ targetId: "source", targetKind: "agent", field: "influence", delta: magnitude * 2 }],
       relationshipDelta: {},
     },
     rest: {
       impacts: [
-        { targetId: "source", field: "health", delta: mag * 0.5 },
-        { targetId: "source", field: "morale", delta: mag * 0.3 },
+        { targetId: "source", targetKind: "agent", field: "health", delta: magnitude * 0.45 },
+        { targetId: "source", targetKind: "agent", field: "morale", delta: magnitude * 0.3 },
       ],
       relationshipDelta: {},
     },
   };
 
-  return effectsMap[actionType];
+  return effects[actionType];
 }
 
-function mapActionToEventType(
-  actionType: ActionProposal["actionType"]
-): SimEvent["type"] {
-  const mapping: Record<ActionProposal["actionType"], SimEvent["type"]> = {
+function mapActionToEventType(actionType: ActionProposal["actionType"]): CausalEvent["type"] {
+  const mapping: Record<ActionProposal["actionType"], CausalEvent["type"]> = {
     negotiate: "negotiation",
     attack: "conflict",
     defend: "conflict",
     trade: "trade",
     ally: "alliance",
     betray: "betrayal",
-    retreat: "action",
-    gather: "action",
-    explore: "action",
+    retreat: "movement",
+    gather: "supply",
+    explore: "travel",
     rest: "action",
   };
+
   return mapping[actionType];
 }
 
-/**
- * Record significant events in agent memory.
- */
 function recordMemories(
   agents: Agent[],
-  events: SimEvent[],
+  events: CausalEvent[],
   tick: number
 ): Agent[] {
   return agents.map((agent) => {
-    const relevantEvents = events.filter(
-      (e) =>
-        e.sourceAgentId === agent.id || e.targetAgentId === agent.id
+    const relevant = events.filter(
+      (event) => event.sourceAgentId === agent.id || event.targetAgentId === agent.id
     );
 
-    if (relevantEvents.length === 0) return agent;
+    if (relevant.length === 0) return agent;
 
-    const newMemories: AgentMemoryEntry[] = relevantEvents.map((e) => ({
+    const memories: AgentMemoryEntry[] = relevant.map((event) => ({
       tick,
-      type: e.type,
-      description: e.description,
-      significance: Math.min(
-        1,
-        e.impact.reduce((sum, i) => sum + Math.abs(i.delta), 0)
+      type: event.type,
+      description: event.description,
+      significance: clamp(
+        event.impact.reduce((sum, impact) => sum + Math.abs(impact.delta), 0),
+        0,
+        1
       ),
     }));
 
-    // Keep memory bounded (last 50 entries)
-    const memory = [...agent.memory, ...newMemories].slice(-50);
-
-    return { ...agent, memory };
+    return {
+      ...agent,
+      memory: [...agent.memory, ...memories].slice(-50),
+    };
   });
 }
+
 function createRandomShock(
-  agents: Agent[],
-  rules: WorldState["rules"],
+  state: WorldState,
   tick: number,
   rng: () => number
-): { modifier: Modifier; event: SimEvent } | null {
-  const shocks = [
-    { id: "famine", name: "Famine", field: "wealth", mul: 0.4, desc: "A severe drought has withered the crops." },
-    { id: "boom", name: "Economic Boom", field: "wealth", mul: 2.2, desc: "New trade routes have opened up prosperously." },
-    { id: "plague", name: "Plague", field: "health", offset: -0.05, desc: "An unknown sickness is spreading through the lands." },
-    { id: "unrest", name: "Civil Unrest", field: "morale", offset: -0.2, desc: "The common folk are protesting the high councils." }
-  ];
+): { modifier: Modifier; event: CausalEvent } | null {
+  const templates = [
+    {
+      id: "famine",
+      name: "Famine",
+      field: "wealth",
+      multiplier: 0.45,
+      description: "A harvest failure ripples through every frontier granary.",
+      tags: ["scarcity", "supply"],
+    },
+    {
+      id: "boom",
+      name: "Trade Boom",
+      field: "wealth",
+      multiplier: 1.9,
+      description: "A sudden market opening floods the routes with coin.",
+      tags: ["trade", "opportunity"],
+    },
+    {
+      id: "plague",
+      name: "Plague",
+      field: "health",
+      offset: -0.05,
+      description: "A mysterious sickness spreads through camps and markets.",
+      tags: ["plague", "collapse"],
+    },
+    {
+      id: "unrest",
+      name: "Civil Unrest",
+      field: "morale",
+      offset: -0.18,
+      description: "Commoners and levies alike are beginning to resist authority.",
+      tags: ["unrest", "front"],
+    },
+  ] as const;
 
-  const template = pickRandom(shocks, rng);
+  const template = pickRandom(templates, rng);
   const modifier: Modifier = {
     id: `mod-${tick}-${template.id}`,
     type: "global",
     targetId: null,
     field: template.field,
-    multiplier: template.mul ?? 1,
-    offset: template.offset ?? 0,
+    multiplier: "multiplier" in template ? template.multiplier : 1,
+    offset: "offset" in template ? template.offset : 0,
     description: template.name,
     remainingTicks: Math.trunc(randomInRange(5, 15, rng)),
   };
 
-  const event: SimEvent = {
-    id: `evt-shock-${tick}`,
+  const event = createCausalEvent(state, {
     tick,
     type: "natural_event",
-    sourceAgentId: null,
-    targetAgentId: null,
-    description: `⚠️ WORLD CRISIS: ${template.name}! ${template.desc}`,
+    description: `${template.name}: ${template.description}`,
     impact: [],
-    causeChain: ["Environmental Shift"],
-    metadata: { shockType: template.id }
-  };
+    confidence: 0.92,
+    tags: [...template.tags],
+    metadata: {
+      shockType: template.id,
+      modifierId: modifier.id,
+    },
+    sequence: 99,
+  });
 
   return { modifier, event };
 }
