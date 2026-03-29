@@ -8,3 +8,5 @@ dist
 prisma/dev.db
 .omniscient-data/
 tsconfig.tsbuildinfo
+.bun-cache/
+package-lock.json
