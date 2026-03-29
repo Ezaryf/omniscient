@@ -1,226 +1,247 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { ArrowLeftRight, GitCompareArrows } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { BranchDiff } from "@/components/compare/branch-diff";
+import { AppShell } from "@/components/ui/app-shell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+
+interface BranchOption {
+  id: string;
+  name: string;
+  currentTick: number;
+}
 
 function CompareContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const branchA = searchParams.get("branchA");
   const branchB = searchParams.get("branchB");
   const projectId = searchParams.get("projectId") ?? "proj-demo";
+  const hasProjectContext = searchParams.has("projectId");
 
-  const [branches, setBranches] = useState<{ id: string; name: string; currentTick: number }[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedA, setSelectedA] = useState(branchA ?? "");
   const [selectedB, setSelectedB] = useState(branchB ?? "");
   const [isLoading, setIsLoading] = useState(false);
-  const [diffData, setDiffData] = useState<{
-    branchA: { id: string; name: string; tick: number };
-    branchB: { id: string; name: string; tick: number };
-    divergence: {
-      commonAncestorTick: number;
-      agentDiffs: [];
-      branchAEvents: [];
-      branchBEvents: [];
-    };
-  } | null>(null);
+  const [diffData, setDiffData] = useState<any>(null);
 
   useEffect(() => {
     fetch(`/api/branches?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((data) => setBranches(data.branches ?? []))
+      .then((response) => response.json())
+      .then((data) => {
+        const nextBranches = data.branches ?? [];
+        setBranches(nextBranches);
+
+        if (nextBranches.length === 0) return;
+
+        setSelectedA((current) => current || branchA || nextBranches[0]?.id || "");
+        setSelectedB((current) => {
+          if (current) return current;
+          if (branchB) return branchB;
+          const fallback = nextBranches.find(
+            (branch: BranchOption) => branch.id !== (branchA || nextBranches[0]?.id)
+          );
+          return fallback?.id ?? "";
+        });
+      })
       .catch(console.error);
-  }, [projectId]);
+  }, [branchA, branchB, projectId]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+
+    if (selectedA) nextParams.set("branchA", selectedA);
+    else nextParams.delete("branchA");
+
+    if (selectedB) nextParams.set("branchB", selectedB);
+    else nextParams.delete("branchB");
+
+    router.replace(`/compare?${nextParams.toString()}`, { scroll: false });
+  }, [router, searchParams, selectedA, selectedB]);
 
   const handleCompare = async () => {
     if (!selectedA || !selectedB || selectedA === selectedB) return;
     setIsLoading(true);
 
     try {
-      const res = await fetch(`/api/compare?branchA=${selectedA}&branchB=${selectedB}`);
-      const data = await res.json();
+      const response = await fetch(`/api/compare?branchA=${selectedA}&branchB=${selectedB}`);
+      const data = await response.json();
       setDiffData(data);
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error(error);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleSwap = () => {
+    setSelectedA(selectedB);
+    setSelectedB(selectedA);
+  };
+
   return (
-    <div className="compare-page">
-      <header className="compare-header">
-        <a href="/" className="btn btn-ghost btn-sm">← Back</a>
-        <h1>Branch Comparison</h1>
-      </header>
+    <AppShell>
+      <div className="page-frame flex flex-col gap-8">
+        <header className="page-header">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              {hasProjectContext ? (
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href={`/workspace?projectId=${projectId}`}>Back to workspace</Link>
+                </Button>
+              ) : (
+                <Button variant="ghost" size="sm" onClick={() => router.back()} type="button">
+                  Back
+                </Button>
+              )}
+              <Badge variant="accent">Divergence inspector</Badge>
+            </div>
+            <div className="space-y-2">
+              <h1 className="page-title">Compare timeline fallout with precision.</h1>
+              <p className="page-subtitle">
+                Choose two branches and inspect what each timeline preserved, destabilized, or left untouched.
+              </p>
+            </div>
+          </div>
+        </header>
 
-      <div className="compare-controls surface-elevated">
-        <div className="compare-select-group">
-          <label htmlFor="branch-a">Branch A</label>
-          <select
-            id="branch-a"
-            className="compare-select"
-            value={selectedA}
-            onChange={(e) => setSelectedA(e.target.value)}
-          >
-            <option value="">Select branch...</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name} (T{b.currentTick})</option>
-            ))}
-          </select>
-        </div>
+        <Card className="bg-[var(--bg-dock)]">
+          <CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] lg:items-end">
+            <div className="space-y-2">
+              <label htmlFor="branch-a" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                Branch A
+              </label>
+              <select
+                id="branch-a"
+                className="h-11 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-sm text-[var(--text-primary)] outline-none"
+                value={selectedA}
+                onChange={(event) => setSelectedA(event.target.value)}
+              >
+                <option value="">Select branch...</option>
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name} (T{branch.currentTick})
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <span className="compare-vs">vs</span>
+            <Button variant="ghost" size="icon" onClick={handleSwap} type="button" disabled={!selectedA || !selectedB}>
+              <ArrowLeftRight className="h-4 w-4" />
+            </Button>
 
-        <div className="compare-select-group">
-          <label htmlFor="branch-b">Branch B</label>
-          <select
-            id="branch-b"
-            className="compare-select"
-            value={selectedB}
-            onChange={(e) => setSelectedB(e.target.value)}
-          >
-            <option value="">Select branch...</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name} (T{b.currentTick})</option>
-            ))}
-          </select>
-        </div>
+            <div className="space-y-2">
+              <label htmlFor="branch-b" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                Branch B
+              </label>
+              <select
+                id="branch-b"
+                className="h-11 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-sm text-[var(--text-primary)] outline-none"
+                value={selectedB}
+                onChange={(event) => setSelectedB(event.target.value)}
+              >
+                <option value="">Select branch...</option>
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name} (T{branch.currentTick})
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <button
-          className="btn btn-primary"
-          onClick={handleCompare}
-          disabled={!selectedA || !selectedB || selectedA === selectedB}
-          type="button"
-          id="btn-compare"
-        >
-          Compare
-        </button>
+            <Button
+              variant="primary"
+              onClick={handleCompare}
+              disabled={!selectedA || !selectedB || selectedA === selectedB}
+              type="button"
+              id="btn-compare"
+            >
+              <GitCompareArrows className="h-4 w-4" />
+              Compare
+            </Button>
+          </CardContent>
+        </Card>
+
+        {branches.length >= 2 ? (
+          <div className="flex flex-wrap gap-3">
+            {branches.map((branch) => {
+              const state = branch.id === selectedA ? "accent" : branch.id === selectedB ? "warning" : "default";
+
+              return (
+                <button
+                  key={branch.id}
+                  className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-3 text-left transition hover:border-[var(--border-strong)]"
+                  onClick={() => {
+                    if (!selectedA || branch.id === selectedB) {
+                      setSelectedA(branch.id);
+                      return;
+                    }
+
+                    if (!selectedB || branch.id === selectedA) {
+                      setSelectedB(branch.id);
+                      return;
+                    }
+
+                    setSelectedB(branch.id);
+                  }}
+                  type="button"
+                >
+                  <div className="flex items-center gap-2">
+                    <Badge variant={state as any}>{state === "accent" ? "A" : state === "warning" ? "B" : "idle"}</Badge>
+                    <strong className="text-sm">{branch.name}</strong>
+                  </div>
+                  <div className="mt-2 text-xs uppercase tracking-[0.14em] text-[var(--text-muted)]">T{branch.currentTick}</div>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {isLoading ? (
+          <Card className="bg-[var(--bg-dock)]">
+            <CardContent className="flex items-center gap-3 p-6 text-sm text-[var(--text-secondary)]">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--accent-primary)]" />
+              Replaying timelines...
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {diffData && !isLoading ? (
+          <BranchDiff branchA={diffData.branchA} branchB={diffData.branchB} divergence={diffData.divergence} />
+        ) : null}
+
+        {!diffData && !isLoading ? (
+          branches.length < 2 ? (
+            <EmptyState
+              title="Create at least two branches first"
+              copy="Open the workspace, fork from an event or create a branch, then compare the fallout here."
+              action={
+                <Button variant="primary" asChild>
+                  <Link href={`/workspace?projectId=${projectId}`}>Go to workspace</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Select two branches to compare"
+              copy="The divergence inspector will show branch contrast, changed fronts, route outcomes, and actor deltas."
+            />
+          )
+        ) : null}
       </div>
-
-      {isLoading && (
-        <div className="compare-loading-overlay surface-elevated">
-          <div className="compare-spinner" />
-          <p>Replaying Timelines...</p>
-        </div>
-      )}
-
-      {diffData && !isLoading && (
-        <BranchDiff
-          branchA={diffData.branchA}
-          branchB={diffData.branchB}
-          divergence={diffData.divergence}
-        />
-      )}
-
-      {!diffData && !isLoading && (
-        branches.length < 2 ? (
-          <div className="compare-empty surface-elevated">
-            <p>Create at least 2 branches in the workspace to compare them.</p>
-            <a href="/workspace" className="btn btn-primary">Go to Workspace</a>
-          </div>
-        ) : (
-          <div className="compare-empty surface-elevated">
-            <p>Select two branches and click Compare to view divergence.</p>
-          </div>
-        )
-      )}
-
-      <style jsx>{`
-        .compare-page {
-          max-width: 960px;
-          margin: 0 auto;
-          padding: var(--space-xl);
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-xl);
-        }
-
-        .compare-header {
-          display: flex;
-          align-items: center;
-          gap: var(--space-md);
-        }
-
-        .compare-header h1 {
-          font-size: 1.5rem;
-        }
-
-        .compare-controls {
-          display: flex;
-          align-items: flex-end;
-          gap: var(--space-md);
-          padding: var(--space-lg);
-        }
-
-        .compare-select-group {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-xs);
-        }
-
-        .compare-select-group label {
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: var(--text-muted);
-        }
-
-        .compare-select {
-          padding: var(--space-sm) var(--space-md);
-          background: var(--bg-surface);
-          border: 1px solid var(--border-default);
-          border-radius: var(--radius-md);
-          color: var(--text-primary);
-          font-family: var(--font-sans);
-          font-size: 0.875rem;
-        }
-
-        .compare-vs {
-          color: var(--text-muted);
-          padding-bottom: var(--space-sm);
-        }
-
-        .compare-empty {
-          padding: var(--space-2xl);
-          text-align: center;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: var(--space-md);
-        }
-
-        .compare-loading-overlay {
-          padding: var(--space-2xl);
-          text-align: center;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: var(--space-md);
-          color: var(--text-primary);
-        }
-
-        .compare-spinner {
-          width: 32px;
-          height: 32px;
-          border: 3px solid var(--border-subtle);
-          border-top-color: var(--accent-primary);
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
-    </div>
+    </AppShell>
   );
 }
 
 export default function ComparePage() {
   return (
-    <Suspense fallback={<div style={{ padding: 32, color: "var(--text-muted)" }}>Loading...</div>}>
+    <Suspense fallback={<div className="page-frame text-sm text-[var(--text-secondary)]">Loading compare view...</div>}>
       <CompareContent />
     </Suspense>
   );

@@ -1,17 +1,28 @@
 import type { Metadata } from "next";
+import { JetBrains_Mono, Manrope } from "next/font/google";
 import "./globals.css";
 
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+});
+
 export const metadata: Metadata = {
-  title: "Omniscient — Multi-Agent Simulation Sandbox",
+  title: "Omniscient - GM Consequence Engine",
   description:
-    "A graph-first simulation sandbox for exploring multi-agent behavior, branching timelines, and causal explanations.",
+    "A GM-first campaign simulator for branching timelines, event causality, campaign maps, and session prep consequences.",
   keywords: [
-    "simulation",
-    "multi-agent",
+    "campaign simulator",
+    "ttrpg gm",
     "branching timelines",
-    "AI",
-    "graph",
-    "strategy",
+    "causality",
+    "worldbuilding",
+    "session prep",
   ],
 };
 
@@ -21,10 +32,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" data-theme="dark">
-      <body>
-        {children}
-      </body>
+    <html lang="en" data-theme="dark" className={`${manrope.variable} ${jetbrainsMono.variable}`}>
+      <body>{children}</body>
     </html>
   );
 }

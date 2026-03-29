@@ -1,91 +1,244 @@
 "use client";
 
-import { useEffect, useCallback, useRef, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { useSimulationStore } from "@/lib/stores/simulation-store";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import type { BoardSelection, CampaignSetupDraft, CanvasBinding, TimelineBranch } from "@/lib/sim/types";
+import { ErrorBoundary } from "@/components/shared/error-boundary";
+import { CanvasInspector } from "@/components/workspace/canvas-inspector";
+import { CampaignSetupSidecar } from "@/components/workspace/campaign-setup-sidecar";
 import { ControlBar } from "@/components/workspace/control-bar";
-import { WorldCanvas } from "@/components/workspace/world-canvas";
-import { AgentInspector } from "@/components/workspace/agent-inspector";
-import { TimelineRail } from "@/components/workspace/timeline-rail";
+import { ContextInspector } from "@/components/workspace/context-inspector";
+import { FreeformCanvas } from "@/components/workspace/freeform-canvas";
 import { ScenarioPanel } from "@/components/workspace/scenario-panel";
+import { TimelineRail } from "@/components/workspace/timeline-rail";
+import { useWorkspaceLayout } from "@/components/workspace/use-workspace-layout";
+import { WorldCanvas } from "@/components/workspace/world-canvas";
+import { InjectEventModal } from "@/components/workspace/inject-event-modal";
+import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
+import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
 import { DEMO_PROJECT_ID } from "@/lib/server/store";
 
 function WorkspaceContent() {
+  const demoProjectMeta = {
+    name: "The Fractured Realms",
+    description:
+      "A geopolitical simulation of five factions vying for control of a resource-scarce continent.",
+  };
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const projectId = searchParams.get("projectId") ?? DEMO_PROJECT_ID;
+  const initialBranchId = searchParams.get("branchId");
+  const initialCanvasId = searchParams.get("canvasId");
+  const workspaceSurface = searchParams.get("surface") === "canvas" ? "canvas" : "map";
+  const shouldOpenSetupFromUrl = searchParams.get("setup") === "1";
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoplayArmedRef = useRef(true);
+
+  const [showInjectModal, setShowInjectModal] = useState(false);
+  const [showBranchModal, setShowBranchModal] = useState(false);
+  const [showSetup, setShowSetup] = useState(shouldOpenSetupFromUrl);
+  const [selectedCanvasBinding, setSelectedCanvasBinding] = useState<CanvasBinding | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<BoardSelection | null>(null);
+  const { hydrated, layout, gridColumns, timelineHeight, beginResize, toggleDock, resetDock } =
+    useWorkspaceLayout();
 
   const {
+    branchId,
     worldState,
     branches,
-    selectedAgentId,
-    selectedAgent,
     recentEvents,
     tickSpeed,
+    projectMeta,
+    workspaceSettings,
+    isNewSimulation,
+    setupStatus,
+    setupDraft,
     setProject,
+    setProjectMeta,
     setBranch,
     setWorldState,
     applyDelta,
     setBranches,
-    setSelectedAgent,
     setStatus,
     addEvents,
     setLastProposals,
+    setSetupStatus,
     sync,
   } = useSimulationStore();
+  const resolvedProjectMeta =
+    projectMeta ?? (projectId === DEMO_PROJECT_ID ? demoProjectMeta : null);
+  const settings = hydrated ? workspaceSettings : DEFAULT_WORKSPACE_SETTINGS;
+  const rootClassName = useMemo(
+    () =>
+      [
+        settings.appearance.density === "compact" ? "density-compact" : "density-comfortable",
+        settings.appearance.textScale === "sm"
+          ? "text-scale-sm"
+          : settings.appearance.textScale === "lg"
+            ? "text-scale-lg"
+            : "text-scale-md",
+        settings.appearance.iconScale === "sm"
+          ? "icon-scale-sm"
+          : settings.appearance.iconScale === "lg"
+            ? "icon-scale-lg"
+            : "icon-scale-md",
+        settings.appearance.reducedMotion ? "reduced-motion" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    [settings.appearance.density, settings.appearance.iconScale, settings.appearance.reducedMotion, settings.appearance.textScale]
+  );
 
-  // ─── Load initial state ──────────────────────────────────────
+  const updateWorkspaceQuery = useCallback(
+    (patch: Record<string, string | null>) => {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      for (const [key, value] of Object.entries(patch)) {
+        if (!value) nextParams.delete(key);
+        else nextParams.set(key, value);
+      }
+      router.replace(`${pathname}?${nextParams.toString()}` as any, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
 
-  const initialBranchId = searchParams.get("branchId");
+  const upsertBranch = useCallback(
+    (nextBranch: TimelineBranch) => {
+      const branchMap = new Map(
+        useSimulationStore.getState().branches.map((candidate) => [candidate.id, candidate])
+      );
+      branchMap.set(nextBranch.id, nextBranch);
+      setBranches(Array.from(branchMap.values()));
+    },
+    [setBranches]
+  );
 
   useEffect(() => {
     setProject(projectId);
 
-    // Fetch branches
-    fetch(`/api/branches?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.branches && data.branches.length > 0) {
-          setBranches(data.branches);
-          
-          const targetBranchId = initialBranchId || data.branches[0].id;
-          setBranch(targetBranchId);
+    const loadWorkspace = async () => {
+      try {
+        const [projectResponse, branchResponse, detailResponse] = await Promise.all([
+          fetch(`/api/projects/${projectId}`),
+          fetch(`/api/branches?projectId=${projectId}`),
+          initialBranchId ? fetch(`/api/branches/detail?id=${initialBranchId}`) : Promise.resolve(null),
+        ]);
 
-          const activeBranch = data.branches.find(
-            (b: { id: string }) => b.id === targetBranchId
-          );
-          if (activeBranch?.latestState) {
-            setWorldState(activeBranch.latestState);
+        if (projectResponse.ok) {
+          const projectData = await projectResponse.json();
+          if (projectData.project) {
+            setProjectMeta({
+              name: projectData.project.name,
+              description: projectData.project.description,
+            });
           }
         }
-      })
-      .catch(console.error);
-  }, [projectId, initialBranchId, setProject, setBranch, setBranches, setWorldState]);
 
-  // ─── Simulation controls ────────────────────────────────────
+        if (detailResponse && detailResponse.ok) {
+          const detailData = await detailResponse.json();
+          if (detailData.branch?.latestState) {
+            setBranch(initialBranchId!);
+            setWorldState(detailData.branch.latestState);
+          }
+        }
+
+        const branchData = await branchResponse.json();
+        if (!branchData.branches || branchData.branches.length === 0) return;
+
+        setBranches(branchData.branches);
+        const targetBranchId = initialBranchId || branchData.branches[0].id;
+        setBranch(targetBranchId);
+        const activeBranch = branchData.branches.find((candidate: TimelineBranch) => candidate.id === targetBranchId);
+        if (activeBranch?.latestState) {
+          setWorldState(activeBranch.latestState);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    void loadWorkspace();
+  }, [initialBranchId, projectId, setBranch, setBranches, setProject, setProjectMeta, setWorldState]);
+
+  useEffect(() => {
+    if (shouldOpenSetupFromUrl) {
+      setShowSetup(true);
+      setSetupStatus("drafting");
+    }
+  }, [setSetupStatus, shouldOpenSetupFromUrl]);
+
+  useEffect(() => {
+    if (isNewSimulation && setupStatus !== "applied") {
+      setShowSetup(true);
+    }
+  }, [isNewSimulation, setupStatus]);
+
+  const executeCommand = useCallback(
+    async (payload: Record<string, unknown>) => {
+      const currentBranchId = useSimulationStore.getState().branchId;
+      const currentTick = useSimulationStore.getState().worldState?.tick ?? 0;
+      if (!currentBranchId) return null;
+
+      const response = await fetch("/api/sim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: currentBranchId,
+          currentTick,
+          ...payload,
+        }),
+      });
+
+      const data = await response.json();
+      if (response.status === 409) {
+        alert(data.error);
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(data.error || "Simulation command failed.");
+      }
+
+      if (data.delta) {
+        applyDelta(data.delta);
+      }
+      if (data.worldState) {
+        setWorldState(data.worldState);
+      }
+      if (data.events) {
+        addEvents(data.events);
+      }
+      if (data.proposals) {
+        setLastProposals(data.proposals);
+      }
+      if (data.branch) {
+        upsertBranch(data.branch);
+      }
+
+      return data;
+    },
+    [addEvents, applyDelta, setLastProposals, setWorldState, upsertBranch]
+  );
 
   const executeTick = useCallback(async () => {
     const state = useSimulationStore.getState();
-    const branchId = state.branchId;
-    const currentTick = state.worldState?.tick ?? 0;
-    if (!branchId) return;
+    if (!state.branchId) return;
 
     setStatus("stepping");
     try {
-      const res = await fetch("/api/sim", {
+      const response = await fetch("/api/sim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          type: "step", 
-          branchId, 
-          currentTick,
-          aiSettings: state.aiSettings
+        body: JSON.stringify({
+          type: "step",
+          branchId: state.branchId,
+          currentTick: state.worldState?.tick ?? 0,
+          aiSettings: state.aiSettings,
         }),
       });
-      const data = await res.json();
 
-      if (res.status === 409) {
-        console.warn("Race condition detected:", data.error);
+      const data = await response.json();
+      if (response.status === 409) {
         alert(data.error);
         setStatus("error");
         return;
@@ -93,120 +246,324 @@ function WorkspaceContent() {
 
       if (data.delta) {
         applyDelta(data.delta);
-        addEvents(data.events ?? []);
-        setLastProposals(data.proposals ?? []);
-      } else if (data.worldState) {
-        setWorldState(data.worldState);
-        addEvents(data.events ?? []);
-        setLastProposals(data.proposals ?? []);
       }
+      if (data.worldState) {
+        setWorldState(data.worldState);
+      }
+      addEvents(data.events ?? []);
+      setLastProposals(data.proposals ?? []);
       setStatus("idle");
-    } catch (err) {
-      console.error("Tick failed:", err);
+    } catch (error) {
+      console.error("Tick failed:", error);
       setStatus("error");
     }
-  }, [setStatus, applyDelta, setWorldState, addEvents, setLastProposals]);
-
-  const handleStep = useCallback(() => {
-    executeTick();
-  }, [executeTick]);
+  }, [addEvents, applyDelta, setLastProposals, setStatus, setWorldState]);
 
   const handlePlay = useCallback(() => {
     setStatus("playing");
     playIntervalRef.current = setInterval(() => {
-      executeTick();
+      void executeTick();
     }, tickSpeed);
-  }, [setStatus, executeTick, tickSpeed]);
+  }, [executeTick, setStatus, tickSpeed]);
 
   const handlePause = useCallback(() => {
-    setStatus("paused");
     if (playIntervalRef.current) {
       clearInterval(playIntervalRef.current);
       playIntervalRef.current = null;
     }
+    setStatus("paused");
   }, [setStatus]);
 
   const handleFastForward = useCallback(async () => {
-    const state = useSimulationStore.getState();
-    const branchId = state.branchId;
-    const currentTick = state.worldState?.tick ?? 0;
-    if (!branchId) return;
-
     setStatus("stepping");
-    try {
-      const res = await fetch("/api/sim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          type: "fastForward", 
-          branchId, 
-          ticks: 10, 
-          currentTick,
-          aiSettings: state.aiSettings
-        }),
-      });
-      const data = await res.json();
+    await executeCommand({
+      type: "fastForward",
+      ticks: 10,
+      aiSettings: useSimulationStore.getState().aiSettings,
+    });
+    setStatus("idle");
+  }, [executeCommand, setStatus]);
 
-      if (res.status === 409) {
-        console.warn("Race condition detected:", data.error);
-        alert(data.error);
+  const onInjectEvent = useCallback(
+    async (event: any) => {
+      setStatus("stepping");
+      try {
+        await executeCommand({
+          type: "injectEvent",
+          event,
+        });
+        await sync();
+      } catch (error) {
+        console.error("Inject event failed:", error);
         setStatus("error");
-        return;
-      }
-
-      if (data.delta) {
-        applyDelta(data.delta);
-        addEvents(data.events ?? []);
-      } else if (data.worldState) {
-        setWorldState(data.worldState);
-        addEvents(data.events ?? []);
-      }
-      setStatus("idle");
-    } catch (err) {
-      console.error("Fast forward failed:", err);
-      setStatus("error");
-    }
-  }, [setStatus, applyDelta, setWorldState, addEvents]);
-
-  const handleCreateBranch = useCallback(async () => {
-    const state = useSimulationStore.getState();
-    const branchId = state.branchId;
-    const currentTick = state.worldState?.tick ?? 0;
-    if (!branchId) return;
-
-    try {
-      const res = await fetch("/api/sim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "createBranch",
-          branchId,
-          name: `Branch @ T${worldState?.tick ?? 0}`,
-          currentTick,
-        }),
-      });
-      const data = await res.json();
-
-      if (data.branch) {
-        setBranches([...branches, data.branch]);
-      }
-    } catch (err) {
-      console.error("Branch creation failed:", err);
-    }
-  }, [worldState?.tick, branches, setBranches]);
-
-  const handleSelectBranch = useCallback(
-    (branchId: string) => {
-      setBranch(branchId);
-      const branch = branches.find((b) => b.id === branchId);
-      if (branch?.latestState) {
-        setWorldState(branch.latestState);
+        throw error;
+      } finally {
+        setStatus("idle");
       }
     },
-    [branches, setBranch, setWorldState]
+    [executeCommand, setStatus, sync]
   );
 
-  // Cleanup interval on unmount
+  const onCreateBranch = useCallback(
+    async (name: string, summary: string) => {
+      setStatus("stepping");
+      try {
+        const data = await executeCommand({
+          type: "createBranch",
+          name,
+          summary,
+        });
+        if (data?.branch?.id) {
+          upsertBranch(data.branch);
+          setBranch(data.branch.id);
+          setWorldState(data.branch.latestState);
+        }
+        await sync();
+      } catch (error) {
+        console.error("Create branch failed:", error);
+        setStatus("error");
+        throw error;
+      } finally {
+        setStatus("idle");
+      }
+    },
+    [executeCommand, setBranch, setStatus, setWorldState, sync, upsertBranch]
+  );
+
+  const onApplySetup = useCallback(
+    async (draft: CampaignSetupDraft) => {
+      setStatus("stepping");
+      try {
+        await executeCommand({
+          type: "applySetup",
+          draft,
+        });
+        setSetupStatus("applied");
+        setShowSetup(false);
+        await sync();
+      } catch (error) {
+        console.error("Apply setup failed:", error);
+        setStatus("error");
+        throw error;
+      } finally {
+        setStatus("idle");
+      }
+    },
+    [executeCommand, setSetupStatus, setStatus, sync]
+  );
+
+  const onMoveToken = useCallback(
+    async (
+      tokenId: string,
+      patch: { x: number; y: number; regionId?: string | null; siteId?: string | null }
+    ) => {
+      await executeCommand({
+        type: "moveToken",
+        tokenId,
+        x: patch.x,
+        y: patch.y,
+        regionId: patch.regionId ?? null,
+        siteId: patch.siteId ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onMoveSite = useCallback(
+    async (
+      siteId: string,
+      patch: { x: number; y: number; regionId?: string | null }
+    ) => {
+      await executeCommand({
+        type: "moveSite",
+        siteId,
+        x: patch.x,
+        y: patch.y,
+        regionId: patch.regionId ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onMoveRegion = useCallback(
+    async (regionId: string, patch: { x: number; y: number }) => {
+      await executeCommand({
+        type: "moveRegion",
+        regionId,
+        x: patch.x,
+        y: patch.y,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onResizeRegion = useCallback(
+    async (regionId: string, radius: number) => {
+      await executeCommand({
+        type: "resizeRegion",
+        regionId,
+        radius,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onMoveAgent = useCallback(
+    async (agentId: string, patch: { x: number; y: number }) => {
+      await executeCommand({
+        type: "moveAgent",
+        agentId,
+        x: patch.x,
+        y: patch.y,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onMoveCampaignNode = useCallback(
+    async (nodeId: string, patch: { x?: number; y?: number; radius?: number }) => {
+      await executeCommand({
+        type: "moveCampaignNode",
+        nodeId,
+        x: patch.x,
+        y: patch.y,
+        radius: patch.radius,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onCreateRegion = useCallback(
+    async (payload: { name: string; kind: "frontier" | "homeland" | "wilds" | "city-state" | "sea"; x: number; y: number; radius?: number }) => {
+      await executeCommand({ type: "createRegion", ...payload });
+    },
+    [executeCommand]
+  );
+
+  const onCreateSite = useCallback(
+    async (payload: { name: string; kind: "waypoint" | "capital" | "stronghold" | "market" | "ruin" | "sanctum"; x: number; y: number; regionId?: string | null }) => {
+      await executeCommand({ type: "createSite", ...payload, regionId: payload.regionId ?? null });
+    },
+    [executeCommand]
+  );
+
+  const onCreateToken = useCallback(
+    async (payload: { name: string; kind: "party" | "faction" | "threat"; x: number; y: number; regionId?: string | null; siteId?: string | null }) => {
+      await executeCommand({
+        type: "createToken",
+        ...payload,
+        regionId: payload.regionId ?? null,
+        siteId: payload.siteId ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onCreateRoute = useCallback(
+    async (payload: { name: string; fromSiteId: string; toSiteId: string }) => {
+      await executeCommand({ type: "createRoute", ...payload });
+    },
+    [executeCommand]
+  );
+
+  const onCreateCampaignNode = useCallback(
+    async (payload: { name: string; kind: "agent" | "faction" | "front" | "event" | "place"; x: number; y: number; regionId?: string | null; siteId?: string | null }) => {
+      await executeCommand({
+        type: "createCampaignNode",
+        ...payload,
+        regionId: payload.regionId ?? null,
+        siteId: payload.siteId ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onCreateBoardLink = useCallback(
+    async (payload: {
+      linkType: "causal" | "alliance" | "conflict" | "dependency" | "route";
+      source: { type: "agent" | "campaignNode" | "region" | "site" | "front"; id: string };
+      target: { type: "agent" | "campaignNode" | "region" | "site" | "front"; id: string };
+      label?: string | null;
+    }) => {
+      await executeCommand({
+        type: "createBoardLink",
+        ...payload,
+        label: payload.label ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onDeleteCampaignNode = useCallback(
+    async (nodeId: string) => {
+      await executeCommand({ type: "deleteCampaignNode", nodeId });
+      setSelectedEntity((current) =>
+        current?.type === "campaignNode" && current.id === nodeId ? null : current
+      );
+    },
+    [executeCommand]
+  );
+
+  const onDeleteBoardLink = useCallback(
+    async (linkId: string) => {
+      await executeCommand({ type: "deleteBoardLink", linkId });
+      setSelectedEntity((current) =>
+        current?.type === "boardLink" && current.id === linkId ? null : current
+      );
+    },
+    [executeCommand]
+  );
+
+  const handleForkFromEvent = useCallback(
+    async (eventId: string) => {
+      setStatus("stepping");
+      try {
+        const data = await executeCommand({
+          type: "forkFromEvent",
+          eventId,
+          name: `Fork from ${eventId.slice(-6)}`,
+          summary: "What-if branch created from a causal event.",
+        });
+        if (data?.branch?.id) {
+          upsertBranch(data.branch);
+          setBranch(data.branch.id);
+          setWorldState(data.branch.latestState);
+        }
+        await sync();
+      } catch (error) {
+        console.error("Fork from event failed:", error);
+        setStatus("error");
+      } finally {
+        setStatus("idle");
+      }
+    },
+    [executeCommand, setBranch, setStatus, setWorldState, sync, upsertBranch]
+  );
+
+  const handleSelectBranch = useCallback(
+    (nextBranchId: string) => {
+      setBranch(nextBranchId);
+      const candidate = branches.find((branch) => branch.id === nextBranchId);
+      if (candidate?.latestState) {
+        setWorldState(candidate.latestState);
+      }
+      updateWorkspaceQuery({ branchId: nextBranchId });
+    },
+    [branches, setBranch, setWorldState, updateWorkspaceQuery]
+  );
+
+  const handleSetSurface = useCallback(
+    (surface: "map" | "canvas") => {
+      setSelectedCanvasBinding(null);
+      setSelectedEntity(null);
+      updateWorkspaceQuery({
+        surface: surface === "canvas" ? "canvas" : null,
+        canvasId: surface === "map" ? null : initialCanvasId ?? null,
+      });
+    },
+    [initialCanvasId, updateWorkspaceQuery]
+  );
+
   useEffect(() => {
     return () => {
       if (playIntervalRef.current) {
@@ -215,7 +572,18 @@ function WorkspaceContent() {
     };
   }, []);
 
-  // ─── Sync Heartbeat ─────────────────────────────────────────
+  useEffect(() => {
+    if (
+      autoplayArmedRef.current &&
+      settings.simulation.autoplayOnLaunch &&
+      branchId &&
+      !isNewSimulation &&
+      setupStatus === "applied"
+    ) {
+      autoplayArmedRef.current = false;
+      handlePlay();
+    }
+  }, [branchId, handlePlay, isNewSimulation, settings.simulation.autoplayOnLaunch, setupStatus]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -228,49 +596,516 @@ function WorkspaceContent() {
     return () => clearInterval(interval);
   }, [sync]);
 
-  const activeBranchId = useSimulationStore.getState().branchId;
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        !selectedEntity ||
+        workspaceSurface !== "map" ||
+        (target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable))
+      ) {
+        return;
+      }
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (selectedEntity.type === "campaignNode") {
+        event.preventDefault();
+        void onDeleteCampaignNode(selectedEntity.id);
+      } else if (selectedEntity.type === "boardLink") {
+        event.preventDefault();
+        void onDeleteBoardLink(selectedEntity.id);
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onDeleteBoardLink, onDeleteCampaignNode, selectedEntity, workspaceSurface]);
 
   return (
-    <div className="workspace-grid">
+    <div
+      className={`workspace-layout bg-[var(--bg-canvas)] ${rootClassName}`}
+      style={
+        {
+          "--workspace-radius": settings.appearance.cornerRadius === "tight" ? "10px" : "14px",
+          "--workspace-gap": settings.appearance.density === "compact" ? "10px" : "12px",
+          "--workspace-panel-pad": settings.appearance.density === "compact" ? "10px" : "12px",
+          "--workspace-grid-columns": gridColumns,
+          "--workspace-timeline-height": `${timelineHeight}px`,
+          "--workspace-divider":
+            settings.appearance.contrast === "soft"
+              ? "rgba(255,255,255,0.06)"
+              : "rgba(255,255,255,0.1)",
+        } as CSSProperties
+      }
+    >
+      <nav className="flex items-center border-b border-[var(--border-subtle)] bg-[var(--bg-shell)] px-4 py-3" style={{ gridArea: "nav" }}>
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-4">
+          <Link href="/" className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]">
+            &larr; Simulations
+          </Link>
+          <div className="h-4 w-px bg-[var(--border-subtle)]" />
+          <div className="min-w-0">
+            <strong className="block truncate text-base font-semibold tracking-[-0.03em] text-[var(--text-primary)]">
+              {resolvedProjectMeta?.name ?? "Campaign Workspace"}
+            </strong>
+            <span className="block truncate text-sm text-[var(--text-secondary)]">
+              {resolvedProjectMeta?.description ||
+                "Shape the first consequence, then watch the map answer back."}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1">
+            <button
+              type="button"
+              onClick={() => handleSetSurface("map")}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                workspaceSurface === "map"
+                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              Campaign Map
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetSurface("canvas")}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                workspaceSurface === "canvas"
+                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              Freeform Canvas
+            </button>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("left")}
+            >
+              {layout.leftCollapsed ? "Show Left" : "Hide Left"}
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("right")}
+            >
+              {layout.rightCollapsed ? "Show Right" : "Hide Right"}
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("timeline")}
+            >
+              {layout.timelineCollapsed ? "Show Timeline" : "Hide Timeline"}
+            </button>
+            <label htmlFor="branch-select" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+              Timeline
+            </label>
+            <select
+              id="branch-select"
+              value={branchId ?? ""}
+              onChange={(event) => handleSelectBranch(event.target.value)}
+              className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-sm text-[var(--text-primary)] outline-none"
+            >
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </nav>
+
       <ControlBar
-        onStep={handleStep}
+        projectId={projectId}
+        onStep={executeTick}
         onPlay={handlePlay}
         onPause={handlePause}
         onFastForward={handleFastForward}
-        onCreateBranch={handleCreateBranch}
+        onInjectEvent={() => setShowInjectModal(true)}
+        onCreateBranch={() => setShowBranchModal(true)}
+        onOpenSetup={() => {
+          setShowSetup(true);
+          setSetupStatus(setupDraft ? "ready" : "drafting");
+        }}
       />
 
-      <WorldCanvas
+      <div className="workspace-main">
+        <div className="workspace-panel workspace-panel-left">
+          {layout.leftCollapsed ? (
+            <CollapsedDock label="World" onExpand={() => toggleDock("left")} />
+          ) : (
+            <ScenarioPanel
+              onAdvanceFront={(frontId, delta, rationale) =>
+                executeCommand({ type: "advanceFront", frontId, delta, rationale })
+              }
+              onAcknowledgeProjection={(projectionId, note) =>
+                executeCommand({ type: "acknowledgeConsequence", consequenceId: projectionId, note })
+              }
+            />
+          )}
+        </div>
+
+        <div
+          className="panel-resize-handle vertical"
+          onPointerDown={(event) => beginResize("left", event)}
+          onDoubleClick={() => resetDock("left")}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize left panel"
+        />
+
+        <div className="workspace-panel workspace-panel-center">
+          {workspaceSurface === "canvas" ? (
+            <FreeformCanvas
+              projectId={projectId}
+              worldState={worldState}
+              initialCanvasId={initialCanvasId}
+              onCanvasChange={(canvasId) => updateWorkspaceQuery({ surface: "canvas", canvasId })}
+              onBindingSelect={setSelectedCanvasBinding}
+            />
+          ) : (
+            <WorldCanvas
+              agents={worldState?.agents ?? []}
+              boardLinks={worldState?.boardLinks ?? []}
+              campaignNodes={worldState?.campaignNodes ?? []}
+              relationships={worldState?.relationships ?? []}
+              map={worldState?.map ?? { id: "map", name: "Map", regions: [], sites: [], routes: [], tokens: [] }}
+              fronts={worldState?.fronts ?? []}
+              selectedEntity={selectedEntity}
+              onSelectEntity={setSelectedEntity}
+              onMoveToken={onMoveToken}
+              onMoveSite={onMoveSite}
+              onMoveRegion={onMoveRegion}
+              onResizeRegion={onResizeRegion}
+              onMoveAgent={onMoveAgent}
+              onMoveCampaignNode={onMoveCampaignNode}
+              onCreateRegion={onCreateRegion}
+              onCreateSite={onCreateSite}
+              onCreateToken={onCreateToken}
+              onCreateRoute={onCreateRoute}
+              onCreateBoardLink={onCreateBoardLink}
+              onCreateCampaignNode={onCreateCampaignNode}
+            />
+          )}
+        </div>
+
+        <div
+          className="panel-resize-handle vertical"
+          onPointerDown={(event) => beginResize("right", event)}
+          onDoubleClick={() => resetDock("right")}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize right panel"
+        />
+
+        <div className="workspace-panel workspace-panel-right">
+          {layout.rightCollapsed ? (
+            <CollapsedDock label="Context" onExpand={() => toggleDock("right")} />
+          ) : workspaceSurface === "canvas" ? (
+            <CanvasInspector binding={selectedCanvasBinding} worldState={worldState} />
+          ) : (
+            <ContextInspector
+              selection={selectedEntity}
+              worldState={worldState}
+              recentEvents={recentEvents}
+              onDeleteCampaignNode={onDeleteCampaignNode}
+              onDeleteBoardLink={onDeleteBoardLink}
+            />
+          )}
+        </div>
+
+        <CampaignSetupSidecar
+          isOpen={showSetup && Boolean(resolvedProjectMeta?.name)}
+          projectName={resolvedProjectMeta?.name ?? ""}
+          projectDescription={resolvedProjectMeta?.description ?? ""}
+          onClose={() => {
+            setShowSetup(false);
+            if (isNewSimulation) {
+              setSetupStatus("dismissed");
+            }
+          }}
+          onApply={onApplySetup}
+        />
+      </div>
+
+      <div className="timeline-shell">
+        <div
+          className="timeline-resize-handle"
+          onPointerDown={(event) => beginResize("timeline", event)}
+          onDoubleClick={() => resetDock("timeline")}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize timeline panel"
+        />
+        {layout.timelineCollapsed ? (
+          <CollapsedDock horizontal label="Timeline" onExpand={() => toggleDock("timeline")} />
+        ) : (
+          <TimelineRail
+            currentTick={worldState?.tick ?? 0}
+            events={recentEvents}
+            causalityGraph={worldState?.causalityGraph ?? null}
+            projections={worldState?.projections ?? []}
+            branches={branches}
+            activeBranchId={branchId}
+            onSelectBranch={handleSelectBranch}
+            onForkFromEvent={handleForkFromEvent}
+          />
+        )}
+      </div>
+
+      <InjectEventModal
+        isOpen={showInjectModal}
+        onClose={() => setShowInjectModal(false)}
         agents={worldState?.agents ?? []}
-        relationships={worldState?.relationships ?? []}
-        selectedAgentId={selectedAgentId}
-        onSelectAgent={setSelectedAgent}
+        nodes={worldState?.campaignNodes ?? []}
+        onSubmit={onInjectEvent}
       />
 
-      <AgentInspector
-        agent={selectedAgent}
-        relationships={worldState?.relationships ?? []}
-        recentEvents={recentEvents}
-        allAgents={worldState?.agents ?? []}
+      <CreateBranchModal
+        isOpen={showBranchModal}
+        onClose={() => setShowBranchModal(false)}
+        onSubmit={onCreateBranch}
       />
 
-      <TimelineRail
-        currentTick={worldState?.tick ?? 0}
-        events={recentEvents}
-        branches={branches}
-        activeBranchId={activeBranchId}
-        onSelectBranch={handleSelectBranch}
-      />
+      <style jsx>{`
+        .workspace-layout {
+          display: grid;
+          grid-template-areas:
+            "nav"
+            "control"
+            "main"
+            "timeline";
+          grid-template-rows: 56px auto minmax(0, 1fr) var(--workspace-timeline-height);
+          grid-template-columns: minmax(0, 1fr);
+          height: 100vh;
+          width: 100vw;
+          overflow: hidden;
+        }
 
-      <ScenarioPanel />
+        .timeline-resize-handle {
+          position: relative;
+          cursor: row-resize;
+          flex: 0 0 10px;
+          background: transparent;
+        }
+
+        .timeline-resize-handle::after {
+          content: "";
+          position: absolute;
+          inset: 50% 18px auto;
+          height: 1px;
+          transform: translateY(-50%);
+          background: var(--workspace-divider);
+          border-radius: 999px;
+          transition: background 0.2s, height 0.2s, box-shadow 0.2s;
+        }
+
+        .workspace-main {
+          grid-area: main;
+          display: grid;
+          grid-template-columns: var(--workspace-grid-columns);
+          gap: 0;
+          overflow: hidden;
+          position: relative;
+          min-height: 0;
+          padding: var(--workspace-panel-pad) var(--workspace-panel-pad) 0;
+        }
+
+        .workspace-panel {
+          min-width: 0;
+          min-height: 0;
+          overflow: hidden;
+          border-radius: var(--workspace-radius);
+        }
+
+        .workspace-panel-left {
+          grid-column: 1;
+        }
+
+        .workspace-panel-center {
+          grid-column: 3;
+          position: relative;
+          min-width: 0;
+          border: 1px solid var(--border-subtle);
+          background: var(--bg-elevated);
+          box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+        }
+
+        .workspace-panel-right {
+          grid-column: 5;
+        }
+
+        .panel-resize-handle {
+          position: relative;
+          min-width: 10px;
+          min-height: 0;
+          margin: 0;
+          align-self: stretch;
+          border-radius: 0;
+          background: transparent;
+          transition: background 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .panel-resize-handle.vertical {
+          cursor: col-resize;
+        }
+
+        .panel-resize-handle.vertical::after {
+          content: "";
+          position: absolute;
+          top: 14px;
+          bottom: 14px;
+          left: 50%;
+          width: 1px;
+          transform: translateX(-50%);
+          background: var(--workspace-divider);
+          border-radius: 999px;
+          transition: background 0.2s, width 0.2s, box-shadow 0.2s;
+        }
+
+        .panel-resize-handle:hover,
+        .panel-resize-handle:focus-visible,
+        .timeline-resize-handle:hover,
+        .timeline-resize-handle:focus-visible {
+          outline: none;
+        }
+
+        .panel-resize-handle:hover::after,
+        .panel-resize-handle:focus-visible::after {
+          width: 2px;
+          background: var(--accent-primary);
+          box-shadow: 0 0 12px var(--accent-primary);
+        }
+
+        .timeline-resize-handle:hover::after,
+        .timeline-resize-handle:focus-visible::after {
+          height: 2px;
+          background: var(--accent-primary);
+          box-shadow: 0 0 12px var(--accent-primary);
+        }
+
+        .timeline-shell {
+          grid-area: timeline;
+          margin: 0 var(--workspace-panel-pad) var(--workspace-panel-pad);
+          min-height: 0;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--workspace-radius);
+          background: var(--bg-dock);
+        }
+
+        .density-compact :global(.panel-header) {
+          padding: 10px 14px;
+        }
+
+        .density-compact :global(.panel-shell) {
+          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+        }
+
+        .text-scale-sm {
+          font-size: 14px;
+        }
+
+        .text-scale-lg {
+          font-size: 17px;
+        }
+
+        .icon-scale-sm :global(svg) {
+          transform: scale(0.92);
+        }
+
+        .icon-scale-lg :global(svg) {
+          transform: scale(1.08);
+        }
+
+        .reduced-motion,
+        .reduced-motion :global(*) {
+          transition-duration: 0ms !important;
+          animation-duration: 0ms !important;
+        }
+
+        @media (max-width: 1200px) {
+          .workspace-main {
+            grid-template-columns: minmax(240px, 280px) 8px minmax(0, 1fr) 8px minmax(260px, 300px);
+          }
+        }
+
+        @media (max-width: 960px) {
+          .workspace-layout {
+            grid-template-areas:
+              "nav"
+              "control"
+              "main"
+              "timeline";
+            grid-template-rows: auto auto minmax(0, 1fr) minmax(220px, 32vh);
+          }
+
+          .workspace-main {
+            grid-template-columns: 1fr;
+            padding: var(--workspace-panel-pad) var(--workspace-panel-pad) 0;
+          }
+
+          .timeline-resize-handle,
+          .panel-resize-handle {
+            display: none;
+          }
+
+          .workspace-panel-left,
+          .workspace-panel-center,
+          .workspace-panel-right {
+            grid-column: auto;
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function CollapsedDock({
+  label,
+  onExpand,
+  horizontal = false,
+}: {
+  label: string;
+  onExpand: () => void;
+  horizontal?: boolean;
+}) {
+  return (
+    <div
+      className={`flex h-full items-center justify-center border border-[var(--border-subtle)] bg-[var(--bg-dock)] ${
+        horizontal ? "rounded-[var(--workspace-radius)]" : "rounded-[var(--workspace-radius)]"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onExpand}
+        className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+      >
+        Show {label}
+      </button>
     </div>
   );
 }
 
 export default function WorkspacePage() {
   return (
-    <Suspense fallback={<div style={{ padding: 32, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>Initializing Workspace...</div>}>
-      <WorkspaceContent />
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense
+        fallback={
+          <div style={{ padding: 32, color: "var(--text-muted)", fontFamily: "var(--font-mono)", background: "var(--bg-canvas)", minHeight: "100vh" }}>
+            Initializing campaign engine...
+          </div>
+        }
+      >
+        <WorkspaceContent />
+      </Suspense>
+    </ErrorBoundary>
   );
 }

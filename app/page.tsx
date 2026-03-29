@@ -3,6 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowRight, GitBranch, Orbit, Radar, Sparkles } from "lucide-react";
+import { CreateSimulationModal } from "@/components/dashboard/create-simulation-modal";
+import { AppShell } from "@/components/ui/app-shell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface Project {
   id: string;
@@ -16,6 +23,7 @@ export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
     fetch("/api/projects")
@@ -27,21 +35,22 @@ export default function HomePage() {
       .catch(() => setLoading(false));
   }, []);
 
-  const handleCreateSimulation = async () => {
+  const handleCreateSimulation = async (name: string, description: string) => {
     setIsCreating(true);
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: `Simulation ${new Date().toLocaleTimeString()}`,
-          description: "A new simulation created from the landing page."
-        })
+        body: JSON.stringify({ name, description }),
       });
 
       const data = await res.json();
       if (data.project?.id) {
-        router.push(`/workspace?projectId=${data.project.id}`);
+        router.push(
+          data.branchId
+            ? `/workspace?projectId=${data.project.id}&branchId=${data.branchId}&setup=1`
+            : `/workspace?projectId=${data.project.id}&setup=1`
+        );
       }
     } catch (err) {
       console.error("Failed to create simulation:", err);
@@ -51,334 +60,152 @@ export default function HomePage() {
   };
 
   return (
-    <div className="landing-container">
-      {/* Background glow */}
-      <div className="landing-bg-glow" aria-hidden="true" />
+    <AppShell>
+      <CreateSimulationModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={handleCreateSimulation}
+      />
 
-      {/* Header */}
-      <header className="landing-header">
-        <div className="landing-logo">
-          <svg
-            width="32"
-            height="32"
-            viewBox="0 0 32 32"
-            fill="none"
-            aria-hidden="true"
-          >
-            <circle cx="16" cy="16" r="14" stroke="var(--accent-primary)" strokeWidth="2" />
-            <circle cx="16" cy="16" r="6" fill="var(--accent-primary)" opacity="0.6" />
-            <circle cx="16" cy="16" r="2" fill="var(--accent-primary)" />
-            <path
-              d="M16 2 L16 30 M2 16 L30 16"
-              stroke="var(--accent-primary)"
-              strokeWidth="0.5"
-              opacity="0.3"
-            />
-          </svg>
-          <span className="landing-logo-text">Omniscient</span>
-        </div>
-      </header>
+      <div className="page-frame flex flex-col gap-10">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--bg-panel)]">
+              <Orbit className="h-5 w-5 text-[var(--accent-primary)]" />
+            </div>
+            <div>
+              <div className="text-lg font-semibold tracking-[-0.03em]">Omniscient</div>
+              <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">GM consequence engine</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/dashboard">Dashboard</Link>
+            </Button>
+            <Button variant="primary" onClick={() => setShowCreateModal(true)} disabled={isCreating}>
+              {isCreating ? "Creating..." : "New Simulation"}
+            </Button>
+          </div>
+        </header>
 
-      {/* Hero */}
-      <main className="landing-main">
-        <div className="landing-hero animate-fade-in">
-          <h1 className="landing-title">
-            Multi-Agent Simulation
-            <span className="landing-title-accent"> Sandbox</span>
-          </h1>
-          <p className="landing-subtitle">
-            Explore branching timelines, AI-driven agent behavior, and causal
-            explanations in a graph-first workspace.
-          </p>
-        </div>
+        <section className="grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_380px]">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge variant="accent">OLED command center</Badge>
+              <Badge>Branching causality</Badge>
+              <Badge>GM-first prep</Badge>
+            </div>
+            <div className="max-w-4xl space-y-5">
+              <h1 className="text-5xl font-semibold leading-[0.96] tracking-[-0.06em] md:text-7xl">
+                Build a living campaign
+                <span className="block text-[var(--text-secondary)]">from consequences, not cards.</span>
+              </h1>
+              <p className="max-w-2xl text-base leading-7 text-[var(--text-secondary)] md:text-lg">
+                Start with a title, launch guided setup, and let Omniscient turn an inciting rupture
+                into fronts, routes, branches, and next-session fallout across the map.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="primary" size="lg" onClick={() => setShowCreateModal(true)} disabled={isCreating}>
+                Open Campaign Setup
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="lg" asChild>
+                <Link href="/dashboard">Browse Timelines</Link>
+              </Button>
+            </div>
+          </div>
 
-        {/* Projects grid */}
-        <section className="landing-projects">
-          <div className="landing-section-header">
-            <h2>Your Simulations</h2>
-            <button 
-              className="btn btn-primary" 
-              type="button" 
-              onClick={handleCreateSimulation}
-              disabled={isCreating}
-            >
-              {isCreating ? "Creating..." : "+ New Simulation"}
-            </button>
+          <Card className="border-[var(--border-strong)] bg-[var(--bg-dock)]">
+            <CardHeader>
+              <Badge variant="warning" className="w-fit">Why it feels different</Badge>
+              <CardTitle className="text-2xl">A premium GM cockpit, not a wiki.</CardTitle>
+              <CardDescription>
+                Every view is tuned around branch pressure, map consequence, and session prep clarity.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {[
+                {
+                  icon: Radar,
+                  title: "Campaign map intelligence",
+                  copy: "Regions, routes, fronts, and actors stay visible without collapsing into clutter.",
+                },
+                {
+                  icon: GitBranch,
+                  title: "True divergence tracking",
+                  copy: "Fork from a single consequence and compare exactly what survives in each branch.",
+                },
+                {
+                  icon: Sparkles,
+                  title: "Prep-forward insight",
+                  copy: "Surface weak routes, volatile fronts, and intervention points before the table gets there.",
+                },
+              ].map((feature) => (
+                <div key={feature.title} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+                      <feature.icon className="h-4 w-4 text-[var(--accent-primary)]" />
+                    </div>
+                    <div className="text-sm font-semibold">{feature.title}</div>
+                  </div>
+                  <p className="text-sm leading-6 text-[var(--text-secondary)]">{feature.copy}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="space-y-5">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <div className="page-kicker">Your simulations</div>
+              <h2 className="page-title text-2xl md:text-3xl">Resume a timeline</h2>
+            </div>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/dashboard">Open full dashboard</Link>
+            </Button>
           </div>
 
           {loading ? (
-            <div className="landing-loading">
-              <div className="landing-skeleton" />
-              <div className="landing-skeleton" />
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div key={index} className="panel-shell h-40 animate-pulse bg-[var(--bg-panel)]" />
+              ))}
             </div>
           ) : projects.length === 0 ? (
-            <div className="landing-empty surface-elevated">
-              <p>No simulations yet. Create your first one to begin.</p>
-            </div>
+            <EmptyState
+              title="No simulations yet"
+              copy="Create your first campaign and the workspace will open in guided setup mode."
+              action={
+                <Button variant="primary" onClick={() => setShowCreateModal(true)} disabled={isCreating}>
+                  Create a timeline
+                </Button>
+              }
+            />
           ) : (
-            <div className="landing-grid">
-              {projects.map((project, i) => (
-                <Link
-                  key={project.id}
-                  href={`/workspace?projectId=${project.id}`}
-                  className="project-card surface-elevated animate-fade-in"
-                  style={{ animationDelay: `${i * 80}ms` }}
-                >
-                  <div className="project-card-header">
-                    <h3>{project.name}</h3>
-                    <span className="status-dot" data-status="active" />
-                  </div>
-                  <p className="project-card-desc">{project.description}</p>
-                  <div className="project-card-meta">
-                    <span className="tag">
-                      {new Date(project.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {projects.map((project) => (
+                <Link key={project.id} href={`/workspace?projectId=${project.id}`} className="group">
+                  <Card className="h-full border-[var(--border-subtle)] transition-all duration-150 group-hover:border-[var(--border-strong)] group-hover:bg-[var(--bg-elevated)]">
+                    <CardHeader className="gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <CardTitle className="text-lg">{project.name}</CardTitle>
+                        <Badge variant="success">Live</Badge>
+                      </div>
+                      <CardDescription className="line-clamp-3">{project.description}</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex items-center justify-between pt-0 text-xs uppercase tracking-[0.16em] text-[var(--text-muted)]">
+                      <span>{new Date(project.createdAt).toLocaleDateString()}</span>
+                      <span className="text-[var(--accent-primary)]">Open timeline</span>
+                    </CardContent>
+                  </Card>
                 </Link>
               ))}
             </div>
           )}
         </section>
-
-        {/* Feature highlights */}
-        <section className="landing-features">
-          <div className="feature-card glass-elevated animate-fade-in">
-            <div className="feature-icon">🌐</div>
-            <h3>Graph-First World View</h3>
-            <p>
-              Agents as nodes, relationships as edges. Pan, zoom, and inspect
-              your simulation world.
-            </p>
-          </div>
-          <div
-            className="feature-card glass-elevated animate-fade-in"
-            style={{ animationDelay: "100ms" }}
-          >
-            <div className="feature-icon">🔀</div>
-            <h3>Branching Timelines</h3>
-            <p>
-              Fork realities at any tick. Compare how different decisions unfold
-              across parallel branches.
-            </p>
-          </div>
-          <div
-            className="feature-card glass-elevated animate-fade-in"
-            style={{ animationDelay: "200ms" }}
-          >
-            <div className="feature-icon">🤖</div>
-            <h3>AI-Driven Agents</h3>
-            <p>
-              Agents reason with AI, but the engine stays deterministic. Every
-              action is explainable.
-            </p>
-          </div>
-        </section>
-      </main>
-
-      <style jsx>{`
-        .landing-container {
-          min-height: 100vh;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .landing-bg-glow {
-          position: fixed;
-          top: -200px;
-          left: 50%;
-          transform: translateX(-50%);
-          width: 800px;
-          height: 600px;
-          background: radial-gradient(
-            ellipse at center,
-            rgba(99, 102, 241, 0.08) 0%,
-            rgba(168, 85, 247, 0.04) 40%,
-            transparent 70%
-          );
-          pointer-events: none;
-          z-index: 0;
-        }
-
-        .landing-header {
-          position: sticky;
-          top: 0;
-          z-index: 10;
-          padding: var(--space-md) var(--space-xl);
-          background: rgba(5, 5, 8, 0.8);
-          backdrop-filter: blur(12px);
-          border-bottom: 1px solid var(--border-subtle);
-        }
-
-        .landing-logo {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-        }
-
-        .landing-logo-text {
-          font-size: 1.125rem;
-          font-weight: 700;
-          letter-spacing: -0.02em;
-          background: linear-gradient(135deg, var(--text-primary), var(--accent-primary));
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-        }
-
-        .landing-main {
-          position: relative;
-          z-index: 1;
-          max-width: 960px;
-          margin: 0 auto;
-          padding: var(--space-3xl) var(--space-xl);
-        }
-
-        .landing-hero {
-          text-align: center;
-          margin-bottom: var(--space-3xl);
-        }
-
-        .landing-title {
-          font-size: 3rem;
-          font-weight: 800;
-          letter-spacing: -0.03em;
-          line-height: 1.1;
-          margin-bottom: var(--space-md);
-        }
-
-        .landing-title-accent {
-          background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-        }
-
-        .landing-subtitle {
-          font-size: 1.125rem;
-          color: var(--text-secondary);
-          max-width: 560px;
-          margin: 0 auto;
-          line-height: 1.6;
-        }
-
-        .landing-section-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: var(--space-lg);
-        }
-
-        .landing-projects {
-          margin-bottom: var(--space-3xl);
-        }
-
-        .landing-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-          gap: var(--space-md);
-        }
-
-        .project-card {
-          display: block;
-          padding: var(--space-lg);
-          text-decoration: none;
-          color: inherit;
-          transition: all var(--transition-base);
-        }
-
-        .project-card:hover {
-          border-color: var(--accent-primary);
-          box-shadow: var(--shadow-glow);
-          transform: translateY(-2px);
-        }
-
-        .project-card-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: var(--space-sm);
-        }
-
-        .project-card-header h3 {
-          font-size: 1rem;
-        }
-
-        .project-card-desc {
-          font-size: 0.875rem;
-          color: var(--text-muted);
-          margin-bottom: var(--space-md);
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-        }
-
-        .project-card-meta {
-          display: flex;
-          gap: var(--space-sm);
-        }
-
-        .landing-empty {
-          padding: var(--space-2xl);
-          text-align: center;
-        }
-
-        .landing-loading {
-          display: flex;
-          flex-direction: column;
-          gap: var(--space-md);
-        }
-
-        .landing-skeleton {
-          height: 120px;
-          border-radius: var(--radius-lg);
-          background: linear-gradient(
-            90deg,
-            var(--bg-surface) 25%,
-            var(--bg-elevated) 50%,
-            var(--bg-surface) 75%
-          );
-          background-size: 200% 100%;
-          animation: shimmer 1.5s ease-in-out infinite;
-        }
-
-        .landing-features {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: var(--space-md);
-        }
-
-        .feature-card {
-          padding: var(--space-lg);
-          border-radius: var(--radius-lg);
-          text-align: center;
-        }
-
-        .feature-icon {
-          font-size: 2rem;
-          margin-bottom: var(--space-sm);
-        }
-
-        .feature-card h3 {
-          font-size: 0.975rem;
-          margin-bottom: var(--space-xs);
-        }
-
-        .feature-card p {
-          font-size: 0.8125rem;
-          color: var(--text-muted);
-          line-height: 1.5;
-        }
-
-        @media (max-width: 768px) {
-          .landing-title {
-            font-size: 2rem;
-          }
-          .landing-features {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
-    </div>
+      </div>
+    </AppShell>
   );
 }
