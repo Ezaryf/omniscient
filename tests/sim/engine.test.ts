@@ -3,9 +3,10 @@ import { tick } from "@/lib/sim/engine";
 import { createRng } from "@/lib/sim/seed";
 import type { WorldState } from "@/lib/sim/types";
 import { DEFAULT_RULES, DEFAULT_SEED } from "@/lib/sim/constants";
+import { ensureWorldState } from "@/lib/sim/campaign";
 
 function createTestWorldState(): WorldState {
-  return {
+  return ensureWorldState({
     tick: 0,
     agents: [
       {
@@ -20,6 +21,8 @@ function createTestWorldState(): WorldState {
         state: { health: 1, morale: 0.8, influence: 50, wealth: 100 },
         resources: { food: 100, gold: 50 },
         memory: [],
+        activeIntent: null,
+        intentHistory: [],
         position: { x: 100, y: 100 },
         status: "alive",
       },
@@ -35,6 +38,8 @@ function createTestWorldState(): WorldState {
         state: { health: 0.9, morale: 0.7, influence: 30, wealth: 60 },
         resources: { food: 80, gold: 30 },
         memory: [],
+        activeIntent: null,
+        intentHistory: [],
         position: { x: 300, y: 200 },
         status: "alive",
       },
@@ -53,7 +58,8 @@ function createTestWorldState(): WorldState {
     events: [],
     rules: { ...DEFAULT_RULES },
     seed: DEFAULT_SEED,
-  };
+    activeModifiers: [],
+  });
 }
 
 describe("Simulation Engine", () => {

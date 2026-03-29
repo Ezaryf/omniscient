@@ -3,16 +3,18 @@ import { SimController } from "@/lib/server/sim-controller";
 import { InMemoryStore, DEMO_BRANCH_ID } from "@/lib/server/store";
 import { SimCommand, WorldState } from "@/lib/sim/types";
 import { DEFAULT_RULES, DEFAULT_SEED } from "@/lib/sim/constants";
+import { ensureWorldState } from "@/lib/sim/campaign";
 
 function createDemoWorldState(): WorldState {
-  return {
+  return ensureWorldState({
     tick: 0,
     agents: [],
     relationships: [],
     events: [],
     rules: { ...DEFAULT_RULES },
     seed: DEFAULT_SEED,
-  };
+    activeModifiers: [],
+  });
 }
 
 describe("Simulation Concurrency (OCC)", () => {
@@ -29,6 +31,7 @@ describe("Simulation Concurrency (OCC)", () => {
       name: "Main",
       summary: "Main timeline",
       branchPointTick: 0,
+      branchOriginEventId: null,
       currentTick: 0,
       stateHash: "hash-0",
       status: "active" as const,

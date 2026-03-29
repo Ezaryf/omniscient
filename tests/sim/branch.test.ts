@@ -3,9 +3,10 @@ import { createBranch, detectDivergence } from "@/lib/sim/branch";
 import { createSnapshot, restoreFromSnapshot, replayEvents } from "@/lib/sim/snapshot";
 import type { WorldState, SimEvent, TimelineBranch } from "@/lib/sim/types";
 import { DEFAULT_RULES, DEFAULT_SEED } from "@/lib/sim/constants";
+import { ensureWorldState } from "@/lib/sim/campaign";
 
 function createTestWorldState(tick = 0): WorldState {
-  return {
+  return ensureWorldState({
     tick,
     agents: [
       {
@@ -18,6 +19,8 @@ function createTestWorldState(tick = 0): WorldState {
         state: { health: 1, morale: 0.8, influence: 50, wealth: 100 },
         resources: { food: 100 },
         memory: [],
+        activeIntent: null,
+        intentHistory: [],
         position: { x: 0, y: 0 },
         status: "alive",
       },
@@ -26,7 +29,8 @@ function createTestWorldState(tick = 0): WorldState {
     events: [],
     rules: { ...DEFAULT_RULES },
     seed: DEFAULT_SEED,
-  };
+    activeModifiers: [],
+  });
 }
 
 function createTestBranch(state: WorldState): TimelineBranch {
@@ -38,6 +42,7 @@ function createTestBranch(state: WorldState): TimelineBranch {
     name: "Main",
     summary: "Main timeline",
     branchPointTick: 0,
+    branchOriginEventId: null,
     currentTick: state.tick,
     stateHash: "test-hash",
     status: "active",
@@ -92,10 +97,52 @@ describe("Branch Management", () => {
     };
 
     const eventsA: SimEvent[] = [
-      { id: "e1", tick: 6, type: "conflict", sourceAgentId: "a1", targetAgentId: null, description: "Battle", impact: [], causeChain: [], metadata: {} },
+      {
+        id: "e1",
+        tick: 6,
+        type: "conflict",
+        sourceAgentId: "a1",
+        targetAgentId: null,
+        actorIds: ["a1"],
+        targetIds: [],
+        description: "Battle",
+        impact: [],
+        causeChain: [],
+        causedBy: [],
+        parentEventIds: [],
+        causalDepth: 0,
+        causalType: null,
+        affects: ["a1"],
+        invalidates: [],
+        branchOriginEventId: null,
+        confidence: 0.8,
+        tags: ["war"],
+        metadata: {},
+      },
     ];
     const eventsB: SimEvent[] = [
-      { id: "e2", tick: 6, type: "negotiation", sourceAgentId: "a1", targetAgentId: null, description: "Peace talks", impact: [], causeChain: [], metadata: {} },
+      {
+        id: "e2",
+        tick: 6,
+        type: "negotiation",
+        sourceAgentId: "a1",
+        targetAgentId: null,
+        actorIds: ["a1"],
+        targetIds: [],
+        description: "Peace talks",
+        impact: [],
+        causeChain: [],
+        causedBy: [],
+        parentEventIds: [],
+        causalDepth: 0,
+        causalType: null,
+        affects: ["a1"],
+        invalidates: [],
+        branchOriginEventId: null,
+        confidence: 0.8,
+        tags: ["peace"],
+        metadata: {},
+      },
     ];
 
     const divergence = detectDivergence(branchA, branchB, eventsA, eventsB);
@@ -143,9 +190,20 @@ describe("Snapshots", () => {
         type: "conflict",
         sourceAgentId: null,
         targetAgentId: "a1",
+        actorIds: [],
+        targetIds: ["a1"],
         description: "Attack",
-        impact: [{ targetId: "a1", field: "health", delta: -0.2 }],
+        impact: [{ targetId: "a1", targetKind: "agent", field: "health", delta: -0.2 }],
         causeChain: [],
+        causedBy: [],
+        parentEventIds: [],
+        causalDepth: 0,
+        causalType: null,
+        affects: ["a1"],
+        invalidates: [],
+        branchOriginEventId: null,
+        confidence: 0.9,
+        tags: ["attack"],
         metadata: {},
       },
       {
@@ -154,9 +212,20 @@ describe("Snapshots", () => {
         type: "trade",
         sourceAgentId: null,
         targetAgentId: "a1",
+        actorIds: [],
+        targetIds: ["a1"],
         description: "Trade",
-        impact: [{ targetId: "a1", field: "wealth", delta: 50 }],
+        impact: [{ targetId: "a1", targetKind: "agent", field: "wealth", delta: 50 }],
         causeChain: [],
+        causedBy: [],
+        parentEventIds: [],
+        causalDepth: 0,
+        causalType: null,
+        affects: ["a1"],
+        invalidates: [],
+        branchOriginEventId: null,
+        confidence: 0.9,
+        tags: ["trade"],
         metadata: {},
       },
     ];
