@@ -471,6 +471,7 @@ function WorkspaceContent() {
       await executeCommand({
         type: "createCampaignNode",
         ...payload,
+        tags: ["manual"],
         regionId: payload.regionId ?? null,
         siteId: payload.siteId ?? null,
       });

@@ -904,7 +904,7 @@ export class SimController {
           siteId,
           position: { x: command.x, y: command.y },
           status: "active",
-          tags: ["manual"],
+          tags: unique([...(command.tags ?? []), "manual"]),
           metrics: {},
         },
       },

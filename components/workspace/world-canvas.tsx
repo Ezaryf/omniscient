@@ -240,6 +240,7 @@ export function WorldCanvas({
   const addMenuRef = useRef<HTMLDivElement>(null);
   const addMenuButtonRef = useRef<HTMLButtonElement>(null);
   const pixiRef = useRef<any>(null);
+  const renderFlagsRef = useRef({ full: false, dragTarget: null as DragTarget | null });
   const renderRafRef = useRef<number | null>(null);
   const animationRafRef = useRef<number | null>(null);
   const dragRef = useRef<{ target: DragTarget; startWorld: Position; moved: boolean } | null>(null);
@@ -370,10 +371,22 @@ export function WorldCanvas({
     animateCamera({ centerX: 0, centerY: 0, scale: 1 });
   }, [animateCamera]);
 
-  const requestRender = useCallback(() => {
+  const requestRender = useCallback((dragTarget?: DragTarget) => {
+    if (dragTarget) {
+      if (!renderFlagsRef.current.full) renderFlagsRef.current.dragTarget = dragTarget;
+    } else {
+      renderFlagsRef.current.full = true;
+      renderFlagsRef.current.dragTarget = null;
+    }
+
     if (renderRafRef.current !== null) return;
     renderRafRef.current = requestAnimationFrame(() => {
       renderRafRef.current = null;
+      const flags = renderFlagsRef.current;
+      const target = flags.dragTarget;
+      flags.full = false;
+      flags.dragTarget = null;
+
       const refs = pixiRef.current;
       if (!refs) return;
       renderScene({
@@ -434,6 +447,7 @@ export function WorldCanvas({
         projectionAgents,
         connectionSourceKey,
         linkType,
+        updateOnlyDragTarget: target || undefined,
       });
     });
   }, [
@@ -611,7 +625,7 @@ export function WorldCanvas({
             Math.abs(world.x - drag.startWorld.x) > 2 ||
             Math.abs(world.y - drag.startWorld.y) > 2;
           applyDrag(sceneRef.current, drag.target, world);
-          liveContext.current.requestRender();
+          liveContext.current.requestRender(drag.target);
         }
       };
 
@@ -818,15 +832,10 @@ export function WorldCanvas({
       className="relative h-full overflow-hidden rounded-[inherit]" 
       style={{ 
         cursor: canvasCursor,
-        background: "radial-gradient(circle at center, #0a1128 0%, #020617 100%)" 
+        background: "#000000" 
       }}
     >
-      {/* ── Atmospheric Glows ── */}
-      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden opacity-40">
-        <div className="absolute -left-1/4 -top-1/4 h-[80%] w-[80%] rounded-full bg-cyan-500/10 blur-[160px]" />
-        <div className="absolute -right-1/4 -bottom-1/4 h-[80%] w-[80%] rounded-full bg-blue-600/10 blur-[160px]" />
-      </div>
-
+      {/* ── Grid Layer Host (PixiJS) ── */}
       <div ref={hostRef} className="absolute inset-0 touch-none select-none z-10" />
 
       <div className="absolute left-4 top-4 z-10 max-w-[22rem] rounded-xl border border-white/[0.08] bg-black/88 px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.48)] backdrop-blur-xl">
@@ -1107,6 +1116,7 @@ function renderScene({
   projectionAgents,
   connectionSourceKey,
   linkType,
+  updateOnlyDragTarget,
 }: {
   refs: any;
   scene: SceneSnapshot;
@@ -1127,6 +1137,7 @@ function renderScene({
   projectionAgents: Array<{ id: string; position: Position }>;
   connectionSourceKey: string | null;
   linkType: BoardLinkType;
+  updateOnlyDragTarget?: DragTarget;
 }) {
   const { Container, Graphics, Text, TextStyle } = refs.modules;
   const zoomScale = refs.viewport.scale.x || 1;
@@ -1141,10 +1152,42 @@ function renderScene({
       ? decodeSelectionKey(connectionSourceKey)
       : null;
 
-
-  for (const layer of Object.values(refs.layers) as any[]) {
-    layer.removeChildren().forEach((child: any) => child.destroy());
+  if (updateOnlyDragTarget && updateOnlyDragTarget.kind !== "region-radius") {
+    const t = updateOnlyDragTarget;
+    const kindToLayer: Record<string, string> = {
+      agent: "agents",
+      site: "sites",
+      region: "regions",
+      token: "tokens",
+      "campaign-node": "nodes",
+    };
+    if (kindToLayer[t.kind]) {
+      const container = refs.layers[kindToLayer[t.kind]].getChildByLabel(`${t.kind}_${t.id}`);
+      if (container) {
+        let pos: Position | undefined;
+        if (t.kind === "agent") pos = scene.agents.find(a => a.id === t.id)?.position;
+        else if (t.kind === "site") pos = scene.map.sites.find(s => s.id === t.id)?.position;
+        else if (t.kind === "region") pos = scene.map.regions.find(r => r.id === t.id)?.center;
+        else if (t.kind === "token") pos = scene.map.tokens.find(token => token.id === t.id)?.position;
+        else if (t.kind === "campaign-node") pos = scene.campaignNodes.find(n => n.id === t.id)?.position;
+        if (pos) container.position.set(pos.x, pos.y);
+      }
+    }
   }
+
+  if (!updateOnlyDragTarget || updateOnlyDragTarget.kind === "region-radius") {
+    refs.layers.grid.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.tokens.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.agents.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.sites.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.regions.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.nodes.removeChildren().forEach((child: any) => child.destroy());
+    refs.layers.ghosts.removeChildren().forEach((child: any) => child.destroy());
+  }
+
+  refs.layers.relationships.removeChildren().forEach((child: any) => child.destroy());
+  refs.layers.routes.removeChildren().forEach((child: any) => child.destroy());
+  refs.layers.fronts.removeChildren().forEach((child: any) => child.destroy());
 
   const majorLabelStyle = new TextStyle({
     fill: 0xf5f5f5,
@@ -1249,42 +1292,43 @@ function renderScene({
       subText.position.set(-width / 2 + 10, 8);
       container.addChild(subText);
     }
-  };
-
-  if (showGrid) {
-    const minorGrid = new Graphics();
-    const majorGrid = new Graphics();
-    const majorStep = GRID_SIZE * 5;
-
-    // Draw minor dots
-    for (let x = -WORLD_EXTENT; x <= WORLD_EXTENT; x += GRID_SIZE) {
-      for (let y = -WORLD_EXTENT; y <= WORLD_EXTENT; y += GRID_SIZE) {
-        if (x % majorStep === 0 && y % majorStep === 0) {
-          // Skip major grid points (handled below for glow)
-          continue;
-        }
-        minorGrid.circle(x, y, 0.8);
-      }
-    }
-    minorGrid.fill({ color: 0x06b6d4, alpha: 0.12 });
-
-    // Draw major glow dots
-    for (let x = -WORLD_EXTENT; x <= WORLD_EXTENT; x += majorStep) {
-      for (let y = -WORLD_EXTENT; y <= WORLD_EXTENT; y += majorStep) {
-        majorGrid.circle(x, y, 1.4);
-        // Subtle outer glow
-        const glow = new Graphics();
-        glow.circle(x, y, 4);
-        glow.fill({ color: 0x06b6d4, alpha: 0.04 });
-        majorGrid.addChild(glow);
-      }
-    }
-    majorGrid.fill({ color: 0x22d3ee, alpha: 0.32 });
-
-    refs.layers.grid.addChild(minorGrid);
-    refs.layers.grid.addChild(majorGrid);
   }
 
+  if (!updateOnlyDragTarget || updateOnlyDragTarget.kind === "region-radius") {
+    if (showGrid) {
+      const minorGrid = new Graphics();
+      const majorGrid = new Graphics();
+      const majorStep = GRID_SIZE * 5;
+
+      // Draw minor dots
+      for (let x = -WORLD_EXTENT; x <= WORLD_EXTENT; x += GRID_SIZE) {
+        for (let y = -WORLD_EXTENT; y <= WORLD_EXTENT; y += GRID_SIZE) {
+          if (x % majorStep === 0 && y % majorStep === 0) {
+            // Skip major grid points (handled below for glow)
+            continue;
+          }
+          minorGrid.circle(x, y, 0.8);
+        }
+      }
+      minorGrid.fill({ color: 0x06b6d4, alpha: 0.12 });
+
+      // Draw major glow dots
+      for (let x = -WORLD_EXTENT; x <= WORLD_EXTENT; x += majorStep) {
+        for (let y = -WORLD_EXTENT; y <= WORLD_EXTENT; y += majorStep) {
+          majorGrid.circle(x, y, 1.4);
+          // Subtle outer glow
+          const glow = new Graphics();
+          glow.circle(x, y, 4);
+          glow.fill({ color: 0x06b6d4, alpha: 0.04 });
+          majorGrid.addChild(glow);
+        }
+      }
+      majorGrid.fill({ color: 0x22d3ee, alpha: 0.32 });
+
+      refs.layers.grid.addChild(minorGrid);
+      refs.layers.grid.addChild(majorGrid);
+    }
+  }
 
   for (const route of scene.map.routes) {
     const from = scene.map.sites.find((site) => site.id === route.fromSiteId);
@@ -1398,10 +1442,12 @@ function renderScene({
     }
   }
 
-  for (const region of scene.map.regions) {
-    const regionIndex = scene.map.regions.findIndex((entry) => entry.id === region.id);
-    const container = new Container();
-    container.position.set(region.center.x, region.center.y);
+  if (!updateOnlyDragTarget || updateOnlyDragTarget.kind === "region-radius") {
+    for (const region of scene.map.regions) {
+      const regionIndex = scene.map.regions.findIndex((entry) => entry.id === region.id);
+      const container = new Container();
+      container.label = `region_${region.id}`;
+      container.position.set(region.center.x, region.center.y);
     container.eventMode = "static";
 
     const fillColor = getFactionColor(region.controllingFactionId);
@@ -1501,6 +1547,7 @@ function renderScene({
       container.addChild(handle);
     }
   }
+  }
 
   for (const front of scene.fronts) {
     const frontIndex = scene.fronts.findIndex((entry) => entry.id === front.id);
@@ -1556,10 +1603,12 @@ function renderScene({
     refs.layers.fronts.addChild(container);
   }
 
-  for (const site of scene.map.sites) {
-    const container = new Container();
-    container.position.set(site.position.x, site.position.y);
-    container.eventMode = "static";
+  if (!updateOnlyDragTarget || updateOnlyDragTarget.kind === "region-radius") {
+    for (const site of scene.map.sites) {
+      const container = new Container();
+      container.label = `site_${site.id}`;
+      container.position.set(site.position.x, site.position.y);
+      container.eventMode = "static";
     container.cursor = editMode ? "grab" : "default";
 
     const isSelected = selectedEntity?.type === "site" && selectedEntity.id === site.id;
@@ -1598,8 +1647,9 @@ function renderScene({
     refs.layers.sites.addChild(container);
   }
 
-  for (const node of scene.campaignNodes.filter((entry) => (entry.tags ?? []).includes("manual"))) {
+  for (const node of scene.campaignNodes) {
     const container = new Container();
+    container.label = `campaign-node_${node.id}`;
     container.position.set(node.position.x, node.position.y);
     container.eventMode = "static";
     container.cursor = editMode ? "grab" : "pointer";
@@ -1640,6 +1690,7 @@ function renderScene({
 
   for (const token of scene.map.tokens) {
     const container = new Container();
+    container.label = `token_${token.id}`;
     container.position.set(token.position.x, token.position.y);
     container.eventMode = "static";
     container.cursor = editMode ? "grab" : "default";
@@ -1693,16 +1744,6 @@ function renderScene({
       refs.layers.ghosts.addChild(ghost);
     }
   }
-
-  for (const agent of scene.agents) {
-    const container = new Container();
-    container.position.set(agent.position.x, agent.position.y);
-    container.eventMode = "static";
-    container.cursor = editMode ? "grab" : "pointer";
-
-    const isSelected = selectedEntity?.type === "agent" && selectedEntity.id === agent.id;
-    const statusColor = agent.status === "alive" ? 0x34d399 : 0xef4444;
-    const factionColor = getFactionColor(agent.factionId);
 
     drawNodeCard(
       container,

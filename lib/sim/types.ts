@@ -759,6 +759,7 @@ export const SimCommandSchema = z.discriminatedUnion("type", [
     factionId: z.string().nullable().optional(),
     regionId: z.string().nullable().optional(),
     siteId: z.string().nullable().optional(),
+    tags: z.array(z.string()).optional(),
     currentTick: z.number().int().min(0).optional(),
   }),
   z.object({
