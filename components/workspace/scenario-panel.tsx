@@ -1,7 +1,7 @@
 "use client";
 
-import { Pin, Siren, Waves } from "lucide-react";
-import type { GmNote, ProjectionArtifact } from "@/lib/sim/types";
+import { Blocks, Pin, Siren, Trash2, Waves } from "lucide-react";
+import type { CampaignNode, GmNote, ProjectionArtifact } from "@/lib/sim/types";
 import { useSimulationStore } from "@/lib/stores/simulation-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,16 +12,24 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 interface ScenarioPanelProps {
   branchName?: string | null;
   tick?: number;
+  campaignNodes: CampaignNode[];
+  selectedNodeId?: string | null;
   onAdvanceFront: (frontId: string, delta: number, rationale: string) => void;
   onAcknowledgeProjection: (projectionId: string, note: string) => void;
+  onSelectNode: (nodeId: string) => void;
+  onDeleteNode: (nodeId: string) => void;
   onGenerateNarrative?: () => void;
 }
 
 export function ScenarioPanel({
   branchName,
   tick,
+  campaignNodes,
+  selectedNodeId,
   onAdvanceFront,
   onAcknowledgeProjection,
+  onSelectNode,
+  onDeleteNode,
   onGenerateNarrative,
 }: ScenarioPanelProps) {
   const { worldState, showProjections } = useSimulationStore();
@@ -45,6 +53,57 @@ export function ScenarioPanel({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-5 p-4">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Blocks className="h-4 w-4 text-[var(--text-secondary)]" />
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">Node library</h3>
+              </div>
+              <Badge variant="default">{campaignNodes.length}</Badge>
+            </div>
+
+            {campaignNodes.length === 0 ? (
+              <EmptyState
+                title="No nodes on the board yet"
+                copy="Create actors, factions, places, fronts, and events on the canvas to manage them here."
+              />
+            ) : (
+              <div className="space-y-2">
+                {campaignNodes.map((node) => (
+                  <div
+                    key={node.id}
+                    className={`flex items-center gap-2 rounded-lg border p-3 transition ${
+                      selectedNodeId === node.id
+                        ? "border-[var(--border-strong)] bg-[var(--bg-elevated)]"
+                        : "border-[var(--border-subtle)] bg-[var(--bg-panel)]"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectNode(node.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{node.name}</div>
+                      <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">
+                        {node.kind}
+                      </div>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      onClick={() => onDeleteNode(node.id)}
+                      className="h-8 w-8 shrink-0 px-0 text-[var(--text-secondary)] hover:text-[var(--status-danger)]"
+                      aria-label={`Delete ${node.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">

@@ -169,7 +169,8 @@ export function useWorkspaceLayout() {
   const gridColumns = useMemo(() => {
     const left = effectiveLayout.leftCollapsed ? COLLAPSED_LEFT_WIDTH : effectiveLayout.leftWidth;
     const right = effectiveLayout.rightCollapsed ? COLLAPSED_RIGHT_WIDTH : effectiveLayout.rightWidth;
-    return `${left}px 10px minmax(0, 1fr) 10px ${right}px`;
+    // Slightly tighter gutters make the workspace feel calmer and less "scaffold-y".
+    return `${left}px 8px minmax(0, 1fr) 8px ${right}px`;
   }, [effectiveLayout.leftCollapsed, effectiveLayout.leftWidth, effectiveLayout.rightCollapsed, effectiveLayout.rightWidth]);
 
   const timelineHeight = effectiveLayout.timelineCollapsed

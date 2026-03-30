@@ -15,27 +15,53 @@ import { FreeformCanvas } from "@/components/workspace/freeform-canvas";
 import { ScenarioPanel } from "@/components/workspace/scenario-panel";
 import { TimelineRail } from "@/components/workspace/timeline-rail";
 import { useWorkspaceLayout } from "@/components/workspace/use-workspace-layout";
-import { WorldCanvas, type BoardTool, type WorldCanvasHandle, type WorldCanvasUiState } from "@/components/workspace/world-canvas";
+import { ReactFlowWorldCanvas } from "@/components/workspace/react-flow-world-canvas";
+import { type BoardTool, type WorldCanvasHandle, type WorldCanvasUiState } from "@/components/workspace/world-canvas";
 import { InjectEventModal } from "@/components/workspace/inject-event-modal";
 import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
 import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
 import { DEMO_PROJECT_ID } from "@/lib/server/store";
 
-type PendingDelete =
-  | { type: "campaignNode"; id: string; label: string }
-  | { type: "boardLink"; id: string; label: string };
+type PendingDelete = {
+  type: BoardSelection["type"];
+  id: string;
+  label: string;
+};
 
 function resolvePendingDelete(
   selection: BoardSelection | null,
   worldState: NonNullable<ReturnType<typeof useSimulationStore.getState>["worldState"]>
 ): PendingDelete | null {
   if (!selection) return null;
+  if (selection.type === "agent") {
+    const agent = worldState.agents.find((entry) => entry.id === selection.id);
+    if (!agent) return null;
+    return { type: "agent", id: agent.id, label: agent.name };
+  }
   if (selection.type === "campaignNode") {
-    const node = worldState.campaignNodes.find(
-      (entry) => entry.id === selection.id && (entry.tags ?? []).includes("manual")
-    );
+    const node = worldState.campaignNodes.find((entry) => entry.id === selection.id);
     if (!node) return null;
     return { type: "campaignNode", id: node.id, label: node.name };
+  }
+  if (selection.type === "region") {
+    const region = worldState.map.regions.find((entry) => entry.id === selection.id);
+    if (!region) return null;
+    return { type: "region", id: region.id, label: region.name };
+  }
+  if (selection.type === "site") {
+    const site = worldState.map.sites.find((entry) => entry.id === selection.id);
+    if (!site) return null;
+    return { type: "site", id: site.id, label: site.name };
+  }
+  if (selection.type === "route") {
+    const route = worldState.map.routes.find((entry) => entry.id === selection.id);
+    if (!route) return null;
+    return { type: "route", id: route.id, label: route.name };
+  }
+  if (selection.type === "front") {
+    const front = worldState.fronts.find((entry) => entry.id === selection.id);
+    if (!front) return null;
+    return { type: "front", id: front.id, label: front.name };
   }
   if (selection.type === "boardLink") {
     const link = worldState.boardLinks.find((entry) => entry.id === selection.id);
@@ -556,11 +582,9 @@ function WorkspaceContent() {
 
   const onDeleteCampaignNode = useCallback(
     async (nodeId: string) => {
-      const node = useSimulationStore.getState().worldState?.campaignNodes.find(
-        (entry) => entry.id === nodeId && (entry.tags ?? []).includes("manual")
-      );
+      const node = useSimulationStore.getState().worldState?.campaignNodes.find((entry) => entry.id === nodeId);
       if (!node) {
-        setDeleteFeedback({ tone: "danger", message: "Only manual board nodes can be removed." });
+        setDeleteFeedback({ tone: "danger", message: "That campaign node no longer exists." });
         return;
       }
       setPendingDelete({ type: "campaignNode", id: nodeId, label: node.name });
@@ -605,13 +629,30 @@ function WorkspaceContent() {
     setPendingDelete(null);
     setSelectedEntity(null);
     try {
-      if (pendingDelete.type === "campaignNode") {
-        await executeCommand({ type: "deleteCampaignNode", nodeId: pendingDelete.id });
-        setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
-      } else {
-        await executeCommand({ type: "deleteBoardLink", linkId: pendingDelete.id });
-        setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
+      switch (pendingDelete.type) {
+        case "agent":
+          await executeCommand({ type: "deleteAgent", agentId: pendingDelete.id });
+          break;
+        case "campaignNode":
+          await executeCommand({ type: "deleteCampaignNode", nodeId: pendingDelete.id });
+          break;
+        case "region":
+          await executeCommand({ type: "deleteRegion", regionId: pendingDelete.id });
+          break;
+        case "site":
+          await executeCommand({ type: "deleteSite", siteId: pendingDelete.id });
+          break;
+        case "route":
+          await executeCommand({ type: "deleteRoute", routeId: pendingDelete.id });
+          break;
+        case "front":
+          await executeCommand({ type: "deleteFront", frontId: pendingDelete.id });
+          break;
+        case "boardLink":
+          await executeCommand({ type: "deleteBoardLink", linkId: pendingDelete.id });
+          break;
       }
+      setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
     } catch (error) {
       console.error("Delete selection failed:", error);
       setSelectedEntity(previousSelection);
@@ -760,10 +801,8 @@ function WorkspaceContent() {
         return;
       }
       if (event.key !== "Delete" && event.key !== "Backspace") return;
-      if (selectedEntity.type === "campaignNode" || selectedEntity.type === "boardLink") {
-        event.preventDefault();
-        requestDeleteSelection(selectedEntity);
-      }
+      event.preventDefault();
+      requestDeleteSelection(selectedEntity);
     };
 
     globalThis.addEventListener("keydown", handler);
@@ -778,7 +817,7 @@ function WorkspaceContent() {
 
   return (
     <div
-      className={`workspace-layout bg-(--bg-canvas) ${rootClassName}`}
+      className={`workspace-shell ${rootClassName}`}
       style={
         {
           "--workspace-radius": settings.appearance.cornerRadius === "tight" ? "10px" : "14px",
@@ -786,36 +825,38 @@ function WorkspaceContent() {
           "--workspace-panel-pad": settings.appearance.density === "compact" ? "10px" : "12px",
           "--workspace-grid-columns": gridColumns,
           "--workspace-timeline-height": `${timelineHeight}px`,
-          "--workspace-divider":
-            settings.appearance.contrast === "soft"
-              ? "rgba(255,255,255,0.06)"
-              : "rgba(255,255,255,0.1)",
         } as CSSProperties
       }
     >
-      <nav className="flex items-center border-b border-[var(--border-subtle)] bg-[var(--bg-shell)] px-4 py-3" style={{ gridArea: "nav" }}>
-        <div className="flex w-full min-w-0 flex-wrap items-center gap-4">
-          <Link href="/" className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]">
+      <header className="workspace-header">
+        <div className="workspace-header-row">
+          <Link
+            href="/"
+            className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+          >
             &larr; Simulations
           </Link>
           <div className="h-4 w-px bg-[var(--border-subtle)]" />
-          <div className="min-w-0">
-            <strong className="block truncate text-base font-semibold tracking-[-0.03em] text-[var(--text-primary)]">
-              {resolvedProjectMeta?.name ?? "Campaign Workspace"}
-            </strong>
-            <span className="block truncate text-sm text-[var(--text-secondary)]">
+          <div className="workspace-title">
+            <strong>{resolvedProjectMeta?.name ?? "Campaign Workspace"}</strong>
+            <span>
               {resolvedProjectMeta?.description ||
                 "Shape the first consequence, then watch the map answer back."}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="accent">{workspaceSurface === "map" ? "Campaign Map" : "Freeform Canvas"}</Badge>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Badge variant="accent">
+              {workspaceSurface === "map" ? "Campaign Map" : "Freeform Canvas"}
+            </Badge>
             <Badge variant="default">{activeBranch?.name ?? "No branch selected"}</Badge>
-            <Badge variant="default">Tick {worldState?.tick ?? 0}</Badge>
             <Badge variant={setupStatus === "applied" ? "success" : "warning"}>
               {setupStatus === "applied" ? "Setup applied" : "Setup pending"}
             </Badge>
           </div>
+        </div>
+
+        <div className="workspace-header-row">
           <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1">
             <button
               type="button"
@@ -826,7 +867,7 @@ function WorkspaceContent() {
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
-              Campaign Map
+              Map
             </button>
             <button
               type="button"
@@ -837,33 +878,40 @@ function WorkspaceContent() {
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
-              Freeform Canvas
+              Canvas
             </button>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+
+          <div className="flex items-center gap-2">
             <button
               type="button"
               className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
               onClick={() => toggleDock("left")}
             >
-              {layout.leftCollapsed ? "Show Left" : "Hide Left"}
+              {layout.leftCollapsed ? "World" : "Hide world"}
             </button>
             <button
               type="button"
               className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
               onClick={() => toggleDock("right")}
             >
-              {layout.rightCollapsed ? "Show Right" : "Hide Right"}
+              {layout.rightCollapsed ? "Context" : "Hide context"}
             </button>
             <button
               type="button"
               className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
               onClick={() => toggleDock("timeline")}
             >
-              {layout.timelineCollapsed ? "Show Timeline" : "Hide Timeline"}
+              {layout.timelineCollapsed ? "Timeline" : "Hide timeline"}
             </button>
-            <label htmlFor="branch-select" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-              Timeline
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            <label
+              htmlFor="branch-select"
+              className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]"
+            >
+              Branch
             </label>
             <select
               id="branch-select"
@@ -877,23 +925,26 @@ function WorkspaceContent() {
                 </option>
               ))}
             </select>
+            <Badge variant="default">Tick {worldState?.tick ?? 0}</Badge>
           </div>
         </div>
-      </nav>
+      </header>
 
-      <ControlBar
-        projectId={projectId}
-        onStep={executeTick}
-        onPlay={handlePlay}
-        onPause={handlePause}
-        onFastForward={handleFastForward}
-        onInjectEvent={() => setShowInjectModal(true)}
-        onCreateBranch={() => setShowBranchModal(true)}
-        onOpenSetup={() => {
-          setShowSetup(true);
-          setSetupStatus(setupDraft ? "ready" : "drafting");
-        }}
-      />
+      <div className="workspace-control">
+        <ControlBar
+          projectId={projectId}
+          onStep={executeTick}
+          onPlay={handlePlay}
+          onPause={handlePause}
+          onFastForward={handleFastForward}
+          onInjectEvent={() => setShowInjectModal(true)}
+          onCreateBranch={() => setShowBranchModal(true)}
+          onOpenSetup={() => {
+            setShowSetup(true);
+            setSetupStatus(setupDraft ? "ready" : "drafting");
+          }}
+        />
+      </div>
 
       <div className="workspace-main">
         <div className="workspace-panel workspace-panel-left">
@@ -903,23 +954,28 @@ function WorkspaceContent() {
             <ScenarioPanel
               branchName={activeBranch?.name ?? null}
               tick={worldState?.tick ?? 0}
+              campaignNodes={worldState?.campaignNodes ?? []}
+              selectedNodeId={selectedEntity?.type === "campaignNode" ? selectedEntity.id : null}
               onAdvanceFront={(frontId, delta, rationale) =>
                 executeCommand({ type: "advanceFront", frontId, delta, rationale })
               }
               onAcknowledgeProjection={(projectionId, note) =>
                 executeCommand({ type: "acknowledgeConsequence", consequenceId: projectionId, note })
               }
+              onSelectNode={(nodeId) => setSelectedEntity({ type: "campaignNode", id: nodeId })}
+              onDeleteNode={(nodeId) => void onDeleteCampaignNode(nodeId)}
               onGenerateNarrative={() => executeCommand({ type: "generateNarrative" })}
             />
           )}
         </div>
 
         <hr
-          className="panel-resize-handle vertical"
+          className="workspace-resize-handle"
           onPointerDown={(event) => beginResize("left", event)}
           onDoubleClick={() => resetDock("left")}
           aria-orientation="vertical"
           aria-label="Resize left panel"
+          data-orientation="vertical"
         />
 
         <div className="workspace-panel workspace-panel-center">
@@ -932,7 +988,7 @@ function WorkspaceContent() {
               onBindingSelect={setSelectedCanvasBinding}
             />
           ) : (
-            <WorldCanvas
+            <ReactFlowWorldCanvas
               ref={worldCanvasRef}
               agents={worldState?.agents ?? []}
               boardLinks={worldState?.boardLinks ?? []}
@@ -962,11 +1018,12 @@ function WorkspaceContent() {
         </div>
 
         <hr
-          className="panel-resize-handle vertical"
+          className="workspace-resize-handle"
           onPointerDown={(event) => beginResize("right", event)}
           onDoubleClick={() => resetDock("right")}
           aria-orientation="vertical"
           aria-label="Resize right panel"
+          data-orientation="vertical"
         />
 
         <div className="workspace-panel workspace-panel-right">
@@ -1004,13 +1061,14 @@ function WorkspaceContent() {
         />
       </div>
 
-      <div className="timeline-shell">
+      <div className="workspace-timeline">
         <hr
-          className="timeline-resize-handle"
+          className="workspace-resize-handle"
           onPointerDown={(event) => beginResize("timeline", event)}
           onDoubleClick={() => resetDock("timeline")}
           aria-orientation="horizontal"
           aria-label="Resize timeline panel"
+          data-orientation="horizontal"
         />
         {layout.timelineCollapsed ? (
           <CollapsedDock horizontal label="Timeline" onExpand={() => toggleDock("timeline")} />
@@ -1053,7 +1111,21 @@ function WorkspaceContent() {
                 Remove <span className="font-semibold text-[var(--text-primary)]">{pendingDelete.label}</span> from the campaign board?
               </p>
             </div>
-            <Badge variant="warning">{pendingDelete.type === "campaignNode" ? "Node" : "Link"}</Badge>
+            <Badge variant="warning">
+              {pendingDelete.type === "boardLink"
+                ? "Link"
+                : pendingDelete.type === "route"
+                  ? "Route"
+                  : pendingDelete.type === "site"
+                    ? "Site"
+                    : pendingDelete.type === "region"
+                      ? "Region"
+                      : pendingDelete.type === "front"
+                        ? "Front"
+                        : pendingDelete.type === "agent"
+                          ? "Agent"
+                          : "Node"}
+            </Badge>
           </div>
           <div className="mt-4 flex items-center justify-end gap-3">
             <Button variant="ghost" size="sm" type="button" onClick={() => setPendingDelete(null)} disabled={isDeletingSelection}>
@@ -1077,199 +1149,6 @@ function WorkspaceContent() {
           </div>
         </div>
       ) : null}
-
-      <style jsx>{`
-        .workspace-layout {
-          display: grid;
-          grid-template-areas:
-            "nav"
-            "control"
-            "main"
-            "timeline";
-          grid-template-rows: 56px auto minmax(0, 1fr) var(--workspace-timeline-height);
-          grid-template-columns: minmax(0, 1fr);
-          height: 100vh;
-          width: 100vw;
-          overflow: hidden;
-        }
-
-        .timeline-resize-handle {
-          position: relative;
-          cursor: row-resize;
-          flex: 0 0 10px;
-          background: transparent;
-        }
-
-        .timeline-resize-handle::after {
-          content: "";
-          position: absolute;
-          inset: 50% 18px auto;
-          height: 1px;
-          transform: translateY(-50%);
-          background: var(--workspace-divider);
-          border-radius: 999px;
-          transition: background 0.2s, height 0.2s, box-shadow 0.2s;
-        }
-
-        .workspace-main {
-          grid-area: main;
-          display: grid;
-          grid-template-columns: var(--workspace-grid-columns);
-          gap: 0;
-          overflow: hidden;
-          position: relative;
-          min-height: 0;
-          padding: var(--workspace-panel-pad) var(--workspace-panel-pad) 0;
-        }
-
-        .workspace-panel {
-          min-width: 0;
-          min-height: 0;
-          overflow: hidden;
-          border-radius: var(--workspace-radius);
-        }
-
-        .workspace-panel-left {
-          grid-column: 1;
-        }
-
-        .workspace-panel-center {
-          grid-column: 3;
-          position: relative;
-          min-width: 0;
-          border: 1px solid var(--border-subtle);
-          background: var(--bg-elevated);
-          box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
-        }
-
-        .workspace-panel-right {
-          grid-column: 5;
-        }
-
-        .panel-resize-handle {
-          position: relative;
-          min-width: 10px;
-          min-height: 0;
-          margin: 0;
-          align-self: stretch;
-          border-radius: 0;
-          background: transparent;
-          transition: background 0.18s ease, box-shadow 0.18s ease;
-        }
-
-        .panel-resize-handle.vertical {
-          cursor: col-resize;
-        }
-
-        .panel-resize-handle.vertical::after {
-          content: "";
-          position: absolute;
-          top: 14px;
-          bottom: 14px;
-          left: 50%;
-          width: 1px;
-          transform: translateX(-50%);
-          background: var(--workspace-divider);
-          border-radius: 999px;
-          transition: background 0.2s, width 0.2s, box-shadow 0.2s;
-        }
-
-        .panel-resize-handle:hover,
-        .panel-resize-handle:focus-visible,
-        .timeline-resize-handle:hover,
-        .timeline-resize-handle:focus-visible {
-          outline: none;
-        }
-
-        .panel-resize-handle:hover::after,
-        .panel-resize-handle:focus-visible::after {
-          width: 2px;
-          background: var(--accent-primary);
-          box-shadow: 0 0 12px var(--accent-primary);
-        }
-
-        .timeline-resize-handle:hover::after,
-        .timeline-resize-handle:focus-visible::after {
-          height: 2px;
-          background: var(--accent-primary);
-          box-shadow: 0 0 12px var(--accent-primary);
-        }
-
-        .timeline-shell {
-          grid-area: timeline;
-          margin: 0 var(--workspace-panel-pad) var(--workspace-panel-pad);
-          min-height: 0;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--workspace-radius);
-          background: var(--bg-dock);
-        }
-
-        .density-compact :global(.panel-header) {
-          padding: 10px 14px;
-        }
-
-        .density-compact :global(.panel-shell) {
-          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
-        }
-
-        .text-scale-sm {
-          font-size: 14px;
-        }
-
-        .text-scale-lg {
-          font-size: 17px;
-        }
-
-        .icon-scale-sm :global(svg) {
-          transform: scale(0.92);
-        }
-
-        .icon-scale-lg :global(svg) {
-          transform: scale(1.08);
-        }
-
-        .reduced-motion,
-        .reduced-motion :global(*) {
-          transition-duration: 0ms !important;
-          animation-duration: 0ms !important;
-        }
-
-        @media (max-width: 1200px) {
-          .workspace-main {
-            grid-template-columns: minmax(240px, 280px) 8px minmax(0, 1fr) 8px minmax(260px, 300px);
-          }
-        }
-
-        @media (max-width: 960px) {
-          .workspace-layout {
-            grid-template-areas:
-              "nav"
-              "control"
-              "main"
-              "timeline";
-            grid-template-rows: auto auto minmax(0, 1fr) minmax(220px, 32vh);
-          }
-
-          .workspace-main {
-            grid-template-columns: 1fr;
-            padding: var(--workspace-panel-pad) var(--workspace-panel-pad) 0;
-          }
-
-          .timeline-resize-handle,
-          .panel-resize-handle {
-            display: none;
-          }
-
-          .workspace-panel-left,
-          .workspace-panel-center,
-          .workspace-panel-right {
-            grid-column: auto;
-          }
-        }
-      `}</style>
     </div>
   );
 }

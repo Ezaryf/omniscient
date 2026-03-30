@@ -6,7 +6,6 @@ import { useSimulationStore } from "@/lib/stores/simulation-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MetricBadge } from "@/components/ui/metric-badge";
-import { Separator } from "@/components/ui/separator";
 import { SettingsModal } from "./settings-modal";
 
 interface ControlBarProps {
@@ -35,7 +34,6 @@ export function ControlBar({
     worldState,
     branchId,
     aiSettings,
-    workspaceSettings,
     setShowProjections,
     showProjections,
     setProjections,
@@ -89,23 +87,24 @@ export function ControlBar({
           : "Ready";
 
   return (
-    <div className="grid gap-4 border-b border-[var(--border-subtle)] bg-[var(--bg-dock)] px-4 py-4 xl:grid-cols-[minmax(260px,1fr)_auto_auto]">
-      <div className="flex min-w-0 items-start gap-4">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--bg-panel)]">
+    <div className="flex flex-col gap-3 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="mr-1 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-[var(--bg-panel)]">
           <Sparkles className="h-4 w-4 text-[var(--text-primary)]" />
         </div>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="truncate text-base font-semibold tracking-[-0.03em]">Omniscient</div>
-            <Badge variant={setupLocked ? "warning" : status === "playing" ? "accent" : "default"}>{statusLabel}</Badge>
-          </div>
-          <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-            Campaign command center for branches, fronts, routes, and causal fallout.
-          </p>
+        <div className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">
+          Command rail
+        </div>
+        <Badge variant={setupLocked ? "warning" : status === "playing" ? "accent" : "default"}>{statusLabel}</Badge>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <MetricBadge label="Tick" value={tick} />
+          <MetricBadge label="Agents" value={aliveCount} />
+          <MetricBadge label="Hot fronts" value={activeFronts} />
+          <MetricBadge label="Routes" value={routesAtRisk} className="border-white/10" />
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 xl:justify-center">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="secondary"
           size="sm"
@@ -137,7 +136,6 @@ export function ControlBar({
           <GitBranchPlus className="h-3.5 w-3.5" />
           Branch
         </Button>
-        <Separator orientation="vertical" className="mx-1 hidden h-7 xl:block" />
         <Button variant={setupLocked ? "primary" : "ghost"} size="sm" onClick={onOpenSetup} type="button">
           Campaign Setup
         </Button>
@@ -153,17 +151,6 @@ export function ControlBar({
           Settings
         </Button>
         <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <MetricBadge label="Tick" value={tick} />
-        <MetricBadge label="Agents" value={aliveCount} />
-        <MetricBadge label="Hot Fronts" value={activeFronts} />
-        <MetricBadge
-          label={workspaceSettings.layout.snap ? "Risky Routes" : "Routes"}
-          value={routesAtRisk}
-          className="border-white/10"
-        />
       </div>
     </div>
   );
