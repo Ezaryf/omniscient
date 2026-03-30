@@ -10,3 +10,4 @@ prisma/dev.db
 tsconfig.tsbuildinfo
 .bun-cache/
 package-lock.json
+tsc_output.txt
