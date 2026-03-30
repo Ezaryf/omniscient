@@ -9,7 +9,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "border-white/14 bg-white/92 px-4 text-[var(--accent-foreground)] shadow-[0_12px_30px_rgba(255,255,255,0.06)] hover:bg-[var(--accent-primary-strong)]",
+          "border-[rgba(34,211,238,0.24)] bg-[var(--accent-primary)] px-4 text-[var(--accent-foreground)] shadow-[0_12px_30px_rgba(34,211,238,0.12)] hover:bg-[var(--accent-primary-strong)]",
         secondary:
           "border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 text-[var(--text-primary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-panel)]",
         ghost:
@@ -17,7 +17,7 @@ const buttonVariants = cva(
         outline:
           "border-[var(--border-strong)] bg-transparent px-4 text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]",
         danger:
-          "border-[rgba(217,82,82,0.28)] bg-[rgba(217,82,82,0.12)] px-4 text-[#f3b1b1] hover:bg-[rgba(217,82,82,0.18)]",
+          "border-[rgba(251,113,133,0.28)] bg-[rgba(251,113,133,0.12)] px-4 text-[#fecdd3] hover:bg-[rgba(251,113,133,0.18)]",
       },
       size: {
         default: "h-10 px-4 py-2",

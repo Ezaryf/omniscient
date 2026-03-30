@@ -10,13 +10,19 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ScenarioPanelProps {
+  branchName?: string | null;
+  tick?: number;
   onAdvanceFront: (frontId: string, delta: number, rationale: string) => void;
   onAcknowledgeProjection: (projectionId: string, note: string) => void;
+  onGenerateNarrative?: () => void;
 }
 
 export function ScenarioPanel({
+  branchName,
+  tick,
   onAdvanceFront,
   onAcknowledgeProjection,
+  onGenerateNarrative,
 }: ScenarioPanelProps) {
   const { worldState, showProjections } = useSimulationStore();
   const fronts = worldState?.fronts ?? [];
@@ -27,8 +33,14 @@ export function ScenarioPanel({
     <DockPanel className="flex flex-col bg-[var(--bg-dock)]">
       <PanelHeader
         title="World intelligence"
-        description="Left signal rail: campaign pressure, prep signals, and GM notes. Selected-object detail lives in the Context Inspector on the right."
-        action={<Badge variant="default">{fronts.length + projections.length + notes.length} signals</Badge>}
+        description="Map-first signal rail for strategic pressure, explainable fallout, and prep-ready context. Selected-object detail lives in the Context Inspector on the right."
+        action={
+          <div className="flex items-center gap-2">
+            {branchName ? <Badge variant="accent">{branchName}</Badge> : null}
+            <Badge variant="default">T{tick ?? 0}</Badge>
+            <Badge variant="default">{fronts.length + projections.length + notes.length} signals</Badge>
+          </div>
+        }
       />
 
       <ScrollArea className="min-h-0 flex-1">
@@ -134,7 +146,14 @@ export function ScenarioPanel({
                 <Pin className="h-4 w-4 text-[var(--text-secondary)]" />
                 <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">GM notes</h3>
               </div>
-              <Badge>{notes.length}</Badge>
+              <div className="flex items-center gap-2">
+                <Badge>{notes.length}</Badge>
+                {onGenerateNarrative && (
+                  <Button variant="outline" size="sm" onClick={onGenerateNarrative} type="button" className="h-6 px-2 text-xs">
+                    Generate
+                  </Button>
+                )}
+              </div>
             </div>
 
             {notes.length === 0 ? (

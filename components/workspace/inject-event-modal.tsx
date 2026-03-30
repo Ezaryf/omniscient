@@ -59,15 +59,17 @@ export function InjectEventModal({
   nodes,
   onSubmit,
 }: InjectEventModalProps) {
-  const defaultEventType = useSimulationStore(
-    (state) => state.workspaceSettings.simulation.defaultEventType
-  );
+  const branchId = useSimulationStore((state) => state.branchId);
+  const aiSettings = useSimulationStore((state) => state.aiSettings);
+  const workspaceSettings = useSimulationStore((state) => state.workspaceSettings);
+  const defaultEventType = workspaceSettings.simulation.defaultEventType;
   const [type, setType] = useState<CausalEventType>(defaultEventType);
   const [description, setDescription] = useState("");
   const [sourceAgentId, setSourceAgentId] = useState("");
   const [targetAgentId, setTargetAgentId] = useState("");
   const [impacts, setImpacts] = useState<EventImpact[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isParsing, setIsParsing] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -102,6 +104,35 @@ export function InjectEventModal({
     );
   };
 
+  const handleAIParse = async () => {
+    if (!description.trim() || !branchId) return;
+    setIsParsing(true);
+    try {
+      const response = await fetch("/api/events/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description,
+          branchId,
+          aiSettings,
+        }),
+      });
+      if (!response.ok) {
+         console.warn("AI Event Parse failed");
+         return;
+      }
+      const data = await response.json();
+      if (data.type) setType(data.type);
+      if (data.sourceAgentId) setSourceAgentId(data.sourceAgentId);
+      if (data.targetAgentId) setTargetAgentId(data.targetAgentId);
+      if (data.impacts && Array.isArray(data.impacts)) setImpacts(data.impacts);
+    } catch (error) {
+      console.error("AI Parse Error:", error);
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!description.trim()) return;
@@ -128,7 +159,7 @@ export function InjectEventModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-[860px] overflow-hidden p-0">
-        <DialogHeader className="border-b border-[var(--border-subtle)] bg-[var(--bg-dock)]/92">
+        <DialogHeader className="border-b border-(--border-subtle) bg-(--bg-dock)/92">
           <Badge variant="accent" className="w-fit">
             Manual Consequence
           </Badge>
@@ -160,9 +191,22 @@ export function InjectEventModal({
             </section>
 
             <section className="grid gap-2">
-              <label htmlFor="event-description" className={fieldLabelClassName}>
-                Description
-              </label>
+              <div className="flex items-center justify-between">
+                  <label htmlFor="event-description" className={fieldLabelClassName}>
+                    Description
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={handleAIParse}
+                    disabled={isParsing || !description.trim() || !aiSettings?.apiKey}
+                    title={!aiSettings?.apiKey ? "Configure AI settings first" : "Parse event description to fill impact fields"}
+                  >
+                     {isParsing ? "Parsing..." : "✨ AI Parse"}
+                  </Button>
+              </div>
               <Textarea
                 id="event-description"
                 rows={4}
@@ -214,11 +258,11 @@ export function InjectEventModal({
             </section>
           </div>
 
-          <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]/85 p-4 shadow-panel">
+          <section className="rounded-xl border border-(--border-subtle) bg-(--bg-panel)/85 p-4 shadow-panel">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className={fieldLabelClassName}>Direct Impacts</div>
-                <p className="text-sm text-[var(--text-secondary)]">
+                <p className="text-sm text-(--text-secondary)">
                   Pin any non-negotiable stat changes. Leave it empty when you want the simulator to
                   infer fallout on its own.
                 </p>
@@ -230,7 +274,7 @@ export function InjectEventModal({
 
             <div className="grid gap-3">
               {impacts.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-elevated)]/55 px-4 py-5 text-sm text-[var(--text-secondary)]">
+                <div className="rounded-lg border border-dashed border-(--border-subtle) bg-(--bg-elevated)/55 px-4 py-5 text-sm text-(--text-secondary)">
                   No direct impacts defined yet. The engine will still extrapolate secondary
                   consequences from the event description and actor context.
                 </div>
@@ -238,7 +282,7 @@ export function InjectEventModal({
                 impacts.map((impact, index) => (
                   <div
                     key={`impact-${index}-${impact.targetId || "new"}`}
-                    className="grid gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/72 p-3 lg:grid-cols-[120px_minmax(0,1.2fr)_140px_110px_44px]"
+                    className="grid gap-3 rounded-lg border border-(--border-subtle) bg-(--bg-elevated)/72 p-3 lg:grid-cols-[120px_minmax(0,1.2fr)_140px_110px_44px]"
                   >
                     <select
                       className={selectClassName}

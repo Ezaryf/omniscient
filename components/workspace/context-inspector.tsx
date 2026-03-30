@@ -17,6 +17,20 @@ interface ContextInspectorProps {
   readonly onDeleteBoardLink?: (linkId: string) => void | Promise<void>;
 }
 
+interface InspectorData {
+  badge: string;
+  title: string;
+  description: string;
+  meta: string[];
+  position: Array<{ label: string; value: string; mono?: boolean }>;
+  metrics: Array<{ label: string; value: string; mono?: boolean }>;
+  links: Array<{ label: string; value: string }>;
+  explanation: { summary: string; evidence: string[] } | null;
+  intent: WorldState["agents"][number]["activeIntent"] | null;
+  previousIntent: WorldState["agents"][number]["activeIntent"] | null;
+  recent: SimEvent[];
+}
+
 export function ContextInspector({
   selection,
   worldState,
@@ -54,29 +68,21 @@ export function ContextInspector({
             {selection.type === "campaignNode" ? (
               <Button
                 type="button"
-                variant="ghost"
+                variant="danger"
                 size="sm"
-                onClick={() => {
-                  if (window.confirm("Remove this manual board node?")) {
-                    void onDeleteCampaignNode?.(selection.id);
-                  }
-                }}
+                onClick={() => void onDeleteCampaignNode?.(selection.id)}
               >
-                Remove
+                Delete Node
               </Button>
             ) : null}
             {selection.type === "boardLink" ? (
               <Button
                 type="button"
-                variant="ghost"
+                variant="danger"
                 size="sm"
-                onClick={() => {
-                  if (window.confirm("Remove this board link?")) {
-                    void onDeleteBoardLink?.(selection.id);
-                  }
-                }}
+                onClick={() => void onDeleteBoardLink?.(selection.id)}
               >
-                Remove
+                Delete Link
               </Button>
             ) : null}
           </div>
@@ -154,6 +160,27 @@ export function ContextInspector({
             </section>
           ) : null}
 
+          {data.explanation ? (
+            <section className="space-y-3">
+              <SectionTitle icon={Radar} label="Why It Matters" />
+              <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+                <div className="text-sm leading-6 text-[var(--text-secondary)]">{data.explanation.summary}</div>
+                {data.explanation.evidence.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    {data.explanation.evidence.map((item) => (
+                      <div
+                        key={item}
+                        className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2 text-sm text-[var(--text-secondary)]"
+                      >
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
           <section className="space-y-3">
             <SectionTitle icon={Siren} label="Recent causal relevance" />
             {data.recent.length === 0 ? (
@@ -175,10 +202,17 @@ export function ContextInspector({
   );
 }
 
-function resolveSelection(selection: BoardSelection, worldState: WorldState, recentEvents: SimEvent[]) {
+function resolveSelection(
+  selection: BoardSelection,
+  worldState: WorldState,
+  recentEvents: SimEvent[]
+): InspectorData {
   if (selection.type === "agent") {
     const agent = worldState.agents.find((entry) => entry.id === selection.id);
     if (!agent) return fallbackSelection(selection, recentEvents);
+    const causalEvents = recentEvents.filter(
+      (event) => event.actorIds.includes(agent.id) || event.targetIds.includes(agent.id)
+    );
     const region = nearestRegion(worldState.map, agent.position)?.name ?? "Unknown";
     const site = nearestSite(worldState.map, agent.position)?.name ?? "In the field";
     return {
@@ -208,11 +242,19 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
         })),
       intent: agent.activeIntent,
       previousIntent: agent.intentHistory.at(-1) ?? null,
+      explanation: {
+        summary:
+          causalEvents.length > 0
+            ? "This actor is already embedded in the live causal chain, so future branch explanations should anchor here before they generalize to faction or regional fallout."
+            : "This actor has not yet accumulated much direct fallout, so its importance is currently structural rather than event-driven.",
+        evidence: [
+          `${agent.memory.length} retained memory entries`,
+          `${causalEvents.length} linked recent event${causalEvents.length === 1 ? "" : "s"}`,
+        ],
+      },
       recent: getLocalCausalNeighborhood(
         worldState,
-        recentEvents
-          .filter((event) => event.actorIds.includes(agent.id) || event.targetIds.includes(agent.id))
-          .map((event) => event.id),
+        causalEvents.map((event) => event.id),
         5
       ),
     };
@@ -236,6 +278,16 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
         { label: "Threat", value: `${Math.round(region.threat * 100)}%` },
       ],
       links: worldState.map.sites.filter((site) => site.regionId === region.id).slice(0, 5).map((site) => ({ label: "Site", value: site.name })),
+      explanation: {
+        summary:
+          "Regions explain macro consequences best: they aggregate threat, supply, stability, and nearby site changes into a single place-based story.",
+        evidence: [
+          `Supply ${Math.round(region.supply * 100)}%`,
+          `Threat ${Math.round(region.threat * 100)}%`,
+        ],
+      },
+      intent: null,
+      previousIntent: null,
       recent: getLocalCausalNeighborhood(
         worldState,
         recentEvents.filter((event) => event.affects.includes(region.id)).map((event) => event.id),
@@ -260,6 +312,13 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
       links: worldState.map.routes
         .filter((route) => route.fromSiteId === site.id || route.toSiteId === site.id)
         .map((route) => ({ label: "Route", value: route.name })),
+      explanation: {
+        summary:
+          "Sites are useful branch anchors because they connect local event fallout to route disruption, territorial pressure, and front escalation.",
+        evidence: [`${worldState.map.routes.filter((route) => route.fromSiteId === site.id || route.toSiteId === site.id).length} linked routes`],
+      },
+      intent: null,
+      previousIntent: null,
       recent: getLocalCausalNeighborhood(
         worldState,
         recentEvents.filter((event) => event.affects.includes(site.id)).map((event) => event.id),
@@ -286,6 +345,16 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
         { label: "From", value: siteName(worldState.map, route.fromSiteId) },
         { label: "To", value: siteName(worldState.map, route.toSiteId) },
       ],
+      explanation: {
+        summary:
+          "Routes carry slower-burn consequences. When they degrade, later events become easier to explain through scarcity, delay, and pressure transfer instead of isolated shocks.",
+        evidence: [
+          `Risk ${Math.round(route.risk * 100)}%`,
+          `Integrity ${Math.round(route.integrity * 100)}%`,
+        ],
+      },
+      intent: null,
+      previousIntent: null,
       recent: getLocalCausalNeighborhood(
         worldState,
         recentEvents.filter((event) => event.affects.includes(route.id)).map((event) => event.id),
@@ -324,6 +393,16 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
             })()
           : []),
       ],
+      explanation: {
+        summary:
+          "Fronts are the clearest strategic explanation layer because they turn multiple small events into a single visible line of escalation, relief, or collapse.",
+        evidence: [
+          `Pressure ${Math.round(front.pressure * 100)}%`,
+          `Progress ${Math.round(front.progress * 100)}%`,
+        ],
+      },
+      intent: null,
+      previousIntent: null,
       recent: getLocalCausalNeighborhood(
         worldState,
         recentEvents.filter((event) => event.affects.includes(front.id)).map((event) => event.id),
@@ -349,6 +428,13 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
         { label: "Source", value: describeLinkEndpoint(boardLink.source, worldState) },
         { label: "Target", value: describeLinkEndpoint(boardLink.target, worldState) },
       ],
+      explanation: {
+        summary:
+          "Manual board links do not drive simulation state directly, but they provide a useful planning overlay for explaining inferred dependencies and intended what-if probes.",
+        evidence: [`Created at tick ${boardLink.createdAtTick}`],
+      },
+      intent: null,
+      previousIntent: null,
       recent: getLocalCausalNeighborhood(
         worldState,
         recentEvents.filter((event) => event.affects.includes(boardLink.id)).map((event) => event.id),
@@ -383,6 +469,13 @@ function resolveSelection(selection: BoardSelection, worldState: WorldState, rec
             ? describeLinkEndpoint(link.target, worldState)
             : describeLinkEndpoint(link.source, worldState),
       })),
+    explanation: {
+      summary:
+        "Manual campaign nodes are best used as planning scaffolds for future causality, helping the GM annotate places, forces, and ideas before the engine turns them into direct events.",
+      evidence: [`${node.tags.length} tag${node.tags.length === 1 ? "" : "s"}`],
+    },
+    intent: null,
+    previousIntent: null,
     recent: getLocalCausalNeighborhood(
       worldState,
       recentEvents.filter((event) => event.affects.includes(node.id)).map((event) => event.id),
@@ -400,6 +493,9 @@ function fallbackSelection(selection: BoardSelection, recentEvents: SimEvent[]) 
     position: [],
     metrics: [],
     links: [],
+    explanation: null,
+    intent: null,
+    previousIntent: null,
     recent: recentEvents.filter((event) => event.affects.includes(selection.id)).slice(-5).reverse(),
   };
 }

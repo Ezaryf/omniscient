@@ -5,6 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { BoardSelection, CampaignSetupDraft, CanvasBinding, TimelineBranch } from "@/lib/sim/types";
 import { ErrorBoundary } from "@/components/shared/error-boundary";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CanvasInspector } from "@/components/workspace/canvas-inspector";
 import { CampaignSetupSidecar } from "@/components/workspace/campaign-setup-sidecar";
 import { ControlBar } from "@/components/workspace/control-bar";
@@ -18,6 +20,34 @@ import { InjectEventModal } from "@/components/workspace/inject-event-modal";
 import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
 import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
 import { DEMO_PROJECT_ID } from "@/lib/server/store";
+
+type PendingDelete =
+  | { type: "campaignNode"; id: string; label: string }
+  | { type: "boardLink"; id: string; label: string };
+
+function resolvePendingDelete(
+  selection: BoardSelection | null,
+  worldState: NonNullable<ReturnType<typeof useSimulationStore.getState>["worldState"]>
+): PendingDelete | null {
+  if (!selection) return null;
+  if (selection.type === "campaignNode") {
+    const node = worldState.campaignNodes.find(
+      (entry) => entry.id === selection.id && (entry.tags ?? []).includes("manual")
+    );
+    if (!node) return null;
+    return { type: "campaignNode", id: node.id, label: node.name };
+  }
+  if (selection.type === "boardLink") {
+    const link = worldState.boardLinks.find((entry) => entry.id === selection.id);
+    if (!link) return null;
+    return {
+      type: "boardLink",
+      id: link.id,
+      label: link.label ?? `${link.type} link`,
+    };
+  }
+  return null;
+}
 
 function WorkspaceContent() {
   const demoProjectMeta = {
@@ -41,6 +71,9 @@ function WorkspaceContent() {
   const [showSetup, setShowSetup] = useState(shouldOpenSetupFromUrl);
   const [selectedCanvasBinding, setSelectedCanvasBinding] = useState<CanvasBinding | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<BoardSelection | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [deleteFeedback, setDeleteFeedback] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
+  const [isDeletingSelection, setIsDeletingSelection] = useState(false);
   const { hydrated, layout, gridColumns, timelineHeight, beginResize, toggleDock, resetDock } =
     useWorkspaceLayout();
 
@@ -69,27 +102,23 @@ function WorkspaceContent() {
   } = useSimulationStore();
   const resolvedProjectMeta =
     projectMeta ?? (projectId === DEMO_PROJECT_ID ? demoProjectMeta : null);
+  const activeBranch = branches.find((candidate) => candidate.id === branchId) ?? null;
   const settings = hydrated ? workspaceSettings : DEFAULT_WORKSPACE_SETTINGS;
-  const rootClassName = useMemo(
-    () =>
-      [
-        settings.appearance.density === "compact" ? "density-compact" : "density-comfortable",
-        settings.appearance.textScale === "sm"
-          ? "text-scale-sm"
-          : settings.appearance.textScale === "lg"
-            ? "text-scale-lg"
-            : "text-scale-md",
-        settings.appearance.iconScale === "sm"
-          ? "icon-scale-sm"
-          : settings.appearance.iconScale === "lg"
-            ? "icon-scale-lg"
-            : "icon-scale-md",
-        settings.appearance.reducedMotion ? "reduced-motion" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-    [settings.appearance.density, settings.appearance.iconScale, settings.appearance.reducedMotion, settings.appearance.textScale]
-  );
+  const { textScale, iconScale, reducedMotion, density } = settings.appearance;
+  const rootClassName = useMemo(() => {
+    const maps = {
+      density: { compact: "density-compact", comfortable: "density-comfortable" },
+      text: { sm: "text-scale-sm", md: "text-scale-md", lg: "text-scale-lg" },
+      icon: { sm: "icon-scale-sm", md: "icon-scale-md", lg: "icon-scale-lg" },
+    };
+
+    return [
+      maps.density[density as keyof typeof maps.density] || maps.density.comfortable,
+      maps.text[textScale as keyof typeof maps.text] || maps.text.md,
+      maps.icon[iconScale as keyof typeof maps.icon] || maps.icon.md,
+      reducedMotion ? "reduced-motion" : "",
+    ].filter(Boolean).join(" ");
+  }, [density, textScale, iconScale, reducedMotion]);
 
   const updateWorkspaceQuery = useCallback(
     (patch: Record<string, string | null>) => {
@@ -497,23 +526,70 @@ function WorkspaceContent() {
 
   const onDeleteCampaignNode = useCallback(
     async (nodeId: string) => {
-      await executeCommand({ type: "deleteCampaignNode", nodeId });
-      setSelectedEntity((current) =>
-        current?.type === "campaignNode" && current.id === nodeId ? null : current
+      const node = useSimulationStore.getState().worldState?.campaignNodes.find(
+        (entry) => entry.id === nodeId && (entry.tags ?? []).includes("manual")
       );
+      if (!node) {
+        setDeleteFeedback({ tone: "danger", message: "Only manual board nodes can be removed." });
+        return;
+      }
+      setPendingDelete({ type: "campaignNode", id: nodeId, label: node.name });
     },
-    [executeCommand]
+    []
   );
 
   const onDeleteBoardLink = useCallback(
     async (linkId: string) => {
-      await executeCommand({ type: "deleteBoardLink", linkId });
-      setSelectedEntity((current) =>
-        current?.type === "boardLink" && current.id === linkId ? null : current
-      );
+      const link = useSimulationStore.getState().worldState?.boardLinks.find((entry) => entry.id === linkId);
+      if (!link) {
+        setDeleteFeedback({ tone: "danger", message: "That board link no longer exists." });
+        return;
+      }
+      setPendingDelete({
+        type: "boardLink",
+        id: linkId,
+        label: link.label ?? `${link.type} link`,
+      });
     },
-    [executeCommand]
+    []
   );
+
+  const requestDeleteSelection = useCallback(
+    (selection: BoardSelection | null) => {
+      const currentWorldState = useSimulationStore.getState().worldState;
+      if (!selection || !currentWorldState) return;
+      const nextPending = resolvePendingDelete(selection, currentWorldState);
+      if (!nextPending) {
+        setDeleteFeedback({ tone: "danger", message: "That selection cannot be deleted from the board." });
+        return;
+      }
+      setPendingDelete(nextPending);
+    },
+    []
+  );
+
+  const confirmDeleteSelection = useCallback(async () => {
+    if (!pendingDelete) return;
+    const previousSelection = selectedEntity;
+    setIsDeletingSelection(true);
+    setPendingDelete(null);
+    setSelectedEntity(null);
+    try {
+      if (pendingDelete.type === "campaignNode") {
+        await executeCommand({ type: "deleteCampaignNode", nodeId: pendingDelete.id });
+        setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
+      } else {
+        await executeCommand({ type: "deleteBoardLink", linkId: pendingDelete.id });
+        setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
+      }
+    } catch (error) {
+      console.error("Delete selection failed:", error);
+      setSelectedEntity(previousSelection);
+      setDeleteFeedback({ tone: "danger", message: `Could not delete ${pendingDelete.label}.` });
+    } finally {
+      setIsDeletingSelection(false);
+    }
+  }, [executeCommand, pendingDelete, selectedEntity]);
 
   const handleForkFromEvent = useCallback(
     async (eventId: string) => {
@@ -611,22 +687,25 @@ function WorkspaceContent() {
         return;
       }
       if (event.key !== "Delete" && event.key !== "Backspace") return;
-      if (selectedEntity.type === "campaignNode") {
+      if (selectedEntity.type === "campaignNode" || selectedEntity.type === "boardLink") {
         event.preventDefault();
-        void onDeleteCampaignNode(selectedEntity.id);
-      } else if (selectedEntity.type === "boardLink") {
-        event.preventDefault();
-        void onDeleteBoardLink(selectedEntity.id);
+        requestDeleteSelection(selectedEntity);
       }
     };
 
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onDeleteBoardLink, onDeleteCampaignNode, selectedEntity, workspaceSurface]);
+    globalThis.addEventListener("keydown", handler);
+    return () => globalThis.removeEventListener("keydown", handler);
+  }, [requestDeleteSelection, selectedEntity, workspaceSurface]);
+
+  useEffect(() => {
+    if (!deleteFeedback) return;
+    const timeout = setTimeout(() => setDeleteFeedback(null), 3200);
+    return () => clearTimeout(timeout);
+  }, [deleteFeedback]);
 
   return (
     <div
-      className={`workspace-layout bg-[var(--bg-canvas)] ${rootClassName}`}
+      className={`workspace-layout bg-(--bg-canvas) ${rootClassName}`}
       style={
         {
           "--workspace-radius": settings.appearance.cornerRadius === "tight" ? "10px" : "14px",
@@ -655,6 +734,14 @@ function WorkspaceContent() {
               {resolvedProjectMeta?.description ||
                 "Shape the first consequence, then watch the map answer back."}
             </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="accent">{workspaceSurface === "map" ? "Campaign Map" : "Freeform Canvas"}</Badge>
+            <Badge variant="default">{activeBranch?.name ?? "No branch selected"}</Badge>
+            <Badge variant="default">Tick {worldState?.tick ?? 0}</Badge>
+            <Badge variant={setupStatus === "applied" ? "success" : "warning"}>
+              {setupStatus === "applied" ? "Setup applied" : "Setup pending"}
+            </Badge>
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1">
             <button
@@ -741,21 +828,23 @@ function WorkspaceContent() {
             <CollapsedDock label="World" onExpand={() => toggleDock("left")} />
           ) : (
             <ScenarioPanel
+              branchName={activeBranch?.name ?? null}
+              tick={worldState?.tick ?? 0}
               onAdvanceFront={(frontId, delta, rationale) =>
                 executeCommand({ type: "advanceFront", frontId, delta, rationale })
               }
               onAcknowledgeProjection={(projectionId, note) =>
                 executeCommand({ type: "acknowledgeConsequence", consequenceId: projectionId, note })
               }
+              onGenerateNarrative={() => executeCommand({ type: "generateNarrative" })}
             />
           )}
         </div>
 
-        <div
+        <hr
           className="panel-resize-handle vertical"
           onPointerDown={(event) => beginResize("left", event)}
           onDoubleClick={() => resetDock("left")}
-          role="separator"
           aria-orientation="vertical"
           aria-label="Resize left panel"
         />
@@ -791,15 +880,15 @@ function WorkspaceContent() {
               onCreateRoute={onCreateRoute}
               onCreateBoardLink={onCreateBoardLink}
               onCreateCampaignNode={onCreateCampaignNode}
+              onRequestDeleteSelection={requestDeleteSelection}
             />
           )}
         </div>
 
-        <div
+        <hr
           className="panel-resize-handle vertical"
           onPointerDown={(event) => beginResize("right", event)}
           onDoubleClick={() => resetDock("right")}
-          role="separator"
           aria-orientation="vertical"
           aria-label="Resize right panel"
         />
@@ -835,11 +924,10 @@ function WorkspaceContent() {
       </div>
 
       <div className="timeline-shell">
-        <div
+        <hr
           className="timeline-resize-handle"
           onPointerDown={(event) => beginResize("timeline", event)}
           onDoubleClick={() => resetDock("timeline")}
-          role="separator"
           aria-orientation="horizontal"
           aria-label="Resize timeline panel"
         />
@@ -872,6 +960,42 @@ function WorkspaceContent() {
         onClose={() => setShowBranchModal(false)}
         onSubmit={onCreateBranch}
       />
+
+      {pendingDelete ? (
+        <div className="absolute bottom-[calc(var(--workspace-panel-pad)+16px)] left-1/2 z-30 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-panel)]/96 p-4 shadow-[0_22px_56px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                Confirm Removal
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                Remove <span className="font-semibold text-[var(--text-primary)]">{pendingDelete.label}</span> from the campaign board?
+              </p>
+            </div>
+            <Badge variant="warning">{pendingDelete.type === "campaignNode" ? "Node" : "Link"}</Badge>
+          </div>
+          <div className="mt-4 flex items-center justify-end gap-3">
+            <Button variant="ghost" size="sm" type="button" onClick={() => setPendingDelete(null)} disabled={isDeletingSelection}>
+              Cancel
+            </Button>
+            <Button variant="danger" size="sm" type="button" onClick={() => void confirmDeleteSelection()} disabled={isDeletingSelection}>
+              {isDeletingSelection ? "Removing..." : "Delete"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteFeedback ? (
+        <div className="absolute right-4 top-[7.5rem] z-30">
+          <div className={`rounded-xl border px-4 py-3 shadow-[0_16px_42px_rgba(0,0,0,0.38)] backdrop-blur-xl ${
+            deleteFeedback.tone === "success"
+              ? "border-[rgba(45,212,191,0.25)] bg-[rgba(15,31,38,0.92)] text-[#a7f3d0]"
+              : "border-[rgba(255,107,107,0.24)] bg-[rgba(37,16,19,0.94)] text-[#ffb4b4]"
+          }`}>
+            <div className="text-sm font-medium">{deleteFeedback.message}</div>
+          </div>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .workspace-layout {
@@ -1080,14 +1204,12 @@ function CollapsedDock({
 }) {
   return (
     <div
-      className={`flex h-full items-center justify-center border border-[var(--border-subtle)] bg-[var(--bg-dock)] ${
-        horizontal ? "rounded-[var(--workspace-radius)]" : "rounded-[var(--workspace-radius)]"
-      }`}
+      className="flex h-full items-center justify-center border border-(--border-subtle) bg-(--bg-dock) rounded-(--workspace-radius)"
     >
       <button
         type="button"
         onClick={onExpand}
-        className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+        className="rounded-md border border-(--border-subtle) bg-(--bg-panel) px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-(--text-secondary) transition hover:text-(--text-primary)"
       >
         Show {label}
       </button>

@@ -74,7 +74,7 @@ export function TimelineRail({
         <div>
           <div className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">Causal timeline</div>
           <p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">
-            Click an event to fork a what-if branch from that exact consequence.
+            Scrub the live branch history, spot divergence points, and fork a what-if branch from the exact consequence that changed the world.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
