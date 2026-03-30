@@ -292,6 +292,30 @@ const CREATION_TOOL_CONFIG: Array<{ tool: BoardTool; label: string; shortcut: st
 const WORLD_EXTENT = 20000;
 const CAMERA_PADDING = 72;
 const GRID_SIZE = 80;
+const CAMERA_MIN_ZOOM = 0.14;
+const CAMERA_MAX_ZOOM = 3.8;
+const CAMERA_PAN_FRICTION = 0.9;
+const CAMERA_PAN_EPSILON = 0.08;
+const CAMERA_ZOOM_EPSILON = 0.001;
+const CAMERA_TARGET_EPSILON = 0.24;
+const CAMERA_DRAG_SENSITIVITY = 1;
+const CAMERA_TARGET_EASE = 0.18;
+const CAMERA_ZOOM_EASE = 0.2;
+const CAMERA_WHEEL_INTENSITY = 0.0014;
+
+interface CameraMotionState {
+  x: number;
+  y: number;
+  zoom: number;
+  targetX: number;
+  targetY: number;
+  targetZoom: number;
+  vx: number;
+  vy: number;
+  isPanning: boolean;
+  hasTarget: boolean;
+  lastTimestamp: number | null;
+}
 
 const FACTION_COLORS: Record<string, number> = {
   "faction-sol": 0x2dd4bf,
@@ -518,6 +542,19 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
   const dragRef = useRef<{ target: DragTarget; startWorld: Position; moved: boolean } | null>(null);
   const sceneRef = useRef<SceneSnapshot>(cloneScene(agents, boardLinks, campaignNodes, relationships, map, fronts));
   const initializedCameraRef = useRef(false);
+  const cameraMotionRef = useRef<CameraMotionState>({
+    x: 0,
+    y: 0,
+    zoom: 1,
+    targetX: 0,
+    targetY: 0,
+    targetZoom: 1,
+    vx: 0,
+    vy: 0,
+    isPanning: false,
+    hasTarget: false,
+    lastTimestamp: null,
+  });
 
   const { projections, showProjections, workspaceSettings, setWorkspaceSettings } =
     useSimulationStore();
@@ -624,7 +661,18 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
         selectedEntity.type === "site" ||
         selectedEntity.type === "front")
   );
-  const canDeleteSelection = Boolean(selectedManualNode || selectedBoardLink);
+  const canDeleteSelection = Boolean(
+    selectedEntity &&
+      (
+        selectedEntity.type === "agent" ||
+        selectedEntity.type === "campaignNode" ||
+        selectedEntity.type === "region" ||
+        selectedEntity.type === "site" ||
+        selectedEntity.type === "route" ||
+        selectedEntity.type === "front" ||
+        selectedEntity.type === "boardLink"
+      )
+  );
   const activeTool: BoardTool =
     addMode !== "none"
       ? addMode
@@ -653,7 +701,7 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
         : "Choose the destination node to complete the link.";
     }
     if (deleteMode) {
-      return "Click a manual node or board link to queue it for removal.";
+      return "Click any canvas object to queue it for removal.";
     }
     if (primaryTool === "move") {
       return "Drag regions, sites, tokens, or agents directly on the board.";
@@ -691,43 +739,135 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
   ]);
 
   const updateZoomHud = useCallback(() => {
-    const viewport = pixiRef.current?.viewport;
-    if (!viewport) return;
-    const nextZoom = Math.round((viewport.scale?.x ?? 1) * 100);
+    const nextZoom = Math.round(cameraMotionRef.current.zoom * 100);
     setZoomPercent((current) => (current === nextZoom ? current : nextZoom));
   }, []);
 
+  const syncViewportToCamera = useCallback(() => {
+    const viewport = pixiRef.current?.viewport;
+    if (!viewport) return;
+    const camera = cameraMotionRef.current;
+    viewport.position.set(camera.x, camera.y);
+    viewport.scale.set(camera.zoom);
+  }, []);
+
+  const runCameraFrame = useCallback((now: number) => {
+    const viewport = pixiRef.current?.viewport;
+    if (!viewport) {
+      animationRafRef.current = null;
+      return;
+    }
+
+    const camera = cameraMotionRef.current;
+    const previousTimestamp = camera.lastTimestamp ?? now;
+    const dt = Math.min(now - previousTimestamp, 32);
+    const dtFactor = Math.max(dt / 16.6667, 0.5);
+    camera.lastTimestamp = now;
+
+    if (camera.isPanning) {
+      camera.x = camera.targetX;
+      camera.y = camera.targetY;
+    } else if (camera.hasTarget) {
+      camera.x += (camera.targetX - camera.x) * CAMERA_TARGET_EASE * dtFactor;
+      camera.y += (camera.targetY - camera.y) * CAMERA_TARGET_EASE * dtFactor;
+      camera.vx = 0;
+      camera.vy = 0;
+    } else {
+      camera.x += camera.vx * dtFactor;
+      camera.y += camera.vy * dtFactor;
+      camera.vx *= Math.pow(CAMERA_PAN_FRICTION, dtFactor);
+      camera.vy *= Math.pow(CAMERA_PAN_FRICTION, dtFactor);
+      if (Math.abs(camera.vx) < CAMERA_PAN_EPSILON) camera.vx = 0;
+      if (Math.abs(camera.vy) < CAMERA_PAN_EPSILON) camera.vy = 0;
+    }
+
+    camera.zoom += (camera.targetZoom - camera.zoom) * CAMERA_ZOOM_EASE * dtFactor;
+    if (Math.abs(camera.targetZoom - camera.zoom) < CAMERA_ZOOM_EPSILON) {
+      camera.zoom = camera.targetZoom;
+    }
+
+    if (
+      camera.hasTarget &&
+      Math.abs(camera.targetX - camera.x) < CAMERA_TARGET_EPSILON &&
+      Math.abs(camera.targetY - camera.y) < CAMERA_TARGET_EPSILON &&
+      Math.abs(camera.targetZoom - camera.zoom) < CAMERA_ZOOM_EPSILON
+    ) {
+      camera.x = camera.targetX;
+      camera.y = camera.targetY;
+      camera.zoom = camera.targetZoom;
+      camera.hasTarget = false;
+    }
+
+    syncViewportToCamera();
+    updateZoomHud();
+
+    const shouldContinue =
+      camera.isPanning ||
+      camera.hasTarget ||
+      Math.abs(camera.vx) >= CAMERA_PAN_EPSILON ||
+      Math.abs(camera.vy) >= CAMERA_PAN_EPSILON ||
+      Math.abs(camera.targetZoom - camera.zoom) >= CAMERA_ZOOM_EPSILON;
+
+    if (shouldContinue) {
+      animationRafRef.current = requestAnimationFrame(runCameraFrame);
+    } else {
+      camera.lastTimestamp = null;
+      animationRafRef.current = null;
+    }
+  }, [syncViewportToCamera, updateZoomHud]);
+
+  const ensureCameraLoop = useCallback(() => {
+    if (animationRafRef.current !== null) return;
+    animationRafRef.current = requestAnimationFrame(runCameraFrame);
+  }, [runCameraFrame]);
+
+  const setCameraTarget = useCallback((target: { x: number; y: number; zoom: number }, options?: { immediate?: boolean }) => {
+    const camera = cameraMotionRef.current;
+    camera.targetX = target.x;
+    camera.targetY = target.y;
+    camera.targetZoom = clamp(target.zoom, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+    camera.hasTarget = !options?.immediate;
+    if (options?.immediate) {
+      if (animationRafRef.current !== null) {
+        cancelAnimationFrame(animationRafRef.current);
+        animationRafRef.current = null;
+      }
+      camera.x = camera.targetX;
+      camera.y = camera.targetY;
+      camera.zoom = camera.targetZoom;
+      camera.vx = 0;
+      camera.vy = 0;
+      camera.lastTimestamp = null;
+      syncViewportToCamera();
+      updateZoomHud();
+      return;
+    }
+    ensureCameraLoop();
+  }, [ensureCameraLoop, syncViewportToCamera, updateZoomHud]);
+
+  const setCameraCenterTarget = useCallback((target: { centerX: number; centerY: number; scale: number }, options?: { immediate?: boolean }) => {
+    const viewport = pixiRef.current?.viewport;
+    if (!viewport) return;
+    const nextZoom = clamp(target.scale, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+    setCameraTarget(
+      {
+        x: viewport.screenWidth / 2 - target.centerX * nextZoom,
+        y: viewport.screenHeight / 2 - target.centerY * nextZoom,
+        zoom: nextZoom,
+      },
+      options
+    );
+  }, [setCameraTarget]);
+
   const animateCamera = useCallback(
     (target: { centerX: number; centerY: number; scale: number }) => {
-      const viewport = pixiRef.current?.viewport;
-      if (!viewport) return;
-
-      if (animationRafRef.current !== null) cancelAnimationFrame(animationRafRef.current);
-
-      const startCenter = viewport.toWorld({
-        x: viewport.screenWidth / 2,
-        y: viewport.screenHeight / 2,
-      });
-      const startScale = viewport.scale.x;
-      const startedAt = performance.now();
-      const duration = workspaceSettings.appearance.reducedMotion ? 0 : 240;
-
-      const step = (now: number) => {
-        const progress = duration === 0 ? 1 : Math.min((now - startedAt) / duration, 1);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        viewport.moveCenter(
-          startCenter.x + (target.centerX - startCenter.x) * eased,
-          startCenter.y + (target.centerY - startCenter.y) * eased
-        );
-        viewport.setZoom(startScale + (target.scale - startScale) * eased, true);
-        updateZoomHud();
-        if (progress < 1) animationRafRef.current = requestAnimationFrame(step);
-        else animationRafRef.current = null;
-      };
-
-      animationRafRef.current = requestAnimationFrame(step);
+      const camera = cameraMotionRef.current;
+      camera.isPanning = false;
+      camera.vx = 0;
+      camera.vy = 0;
+      setCameraCenterTarget(target, { immediate: workspaceSettings.appearance.reducedMotion });
     },
-    [updateZoomHud, workspaceSettings.appearance.reducedMotion]
+    [setCameraCenterTarget, workspaceSettings.appearance.reducedMotion]
   );
 
   const fitToContent = useCallback(() => {
@@ -753,12 +893,11 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
   const focusSelection = useCallback(() => {
     if (!selectedEntity) return;
     const position = resolveBoardSelectionPosition(sceneRef.current, selectedEntity);
-    const viewport = pixiRef.current?.viewport;
-    if (!position || !viewport) return;
+    if (!position) return;
     animateCamera({
       centerX: position.x,
       centerY: position.y,
-      scale: Math.max(viewport.scale.x, selectedEntity.type === "boardLink" || selectedEntity.type === "route" ? 0.95 : 1.15),
+      scale: Math.max(cameraMotionRef.current.zoom, selectedEntity.type === "boardLink" || selectedEntity.type === "route" ? 0.95 : 1.15),
     });
   }, [animateCamera, selectedEntity]);
 
@@ -1426,6 +1565,11 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
           setConnectionSourceKey(null);
         },
         setDragTarget: (target: DragTarget, startWorld: Position) => {
+          const camera = cameraMotionRef.current;
+          camera.isPanning = false;
+          camera.hasTarget = false;
+          camera.vx = 0;
+          camera.vy = 0;
           dragRef.current = { target, startWorld, moved: false };
         },
         editMode: primaryTool === "move" && !deleteMode,
@@ -1553,22 +1697,32 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
         viewport.screenHeight = h;
       };
       viewport.setZoom = (zoom: number, centerXY?: boolean) => {
-        const clampZoom = Math.max(0.14, Math.min(zoom, 3.8));
+        const clampZoom = clamp(zoom, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+        const camera = cameraMotionRef.current;
         if (centerXY) {
            const cx = viewport.screenWidth / 2;
            const cy = viewport.screenHeight / 2;
-           const worldX = (cx - viewport.position.x) / viewport.scale.x;
-           const worldY = (cy - viewport.position.y) / viewport.scale.y;
-           viewport.scale.set(clampZoom);
-           viewport.position.x = cx - worldX * clampZoom;
-           viewport.position.y = cy - worldY * clampZoom;
+           const worldX = (cx - camera.x) / camera.zoom;
+           const worldY = (cy - camera.y) / camera.zoom;
+           setCameraTarget({
+             x: cx - worldX * clampZoom,
+             y: cy - worldY * clampZoom,
+             zoom: clampZoom,
+           });
         } else {
-           viewport.scale.set(clampZoom);
+           setCameraTarget({
+             x: camera.targetX,
+             y: camera.targetY,
+             zoom: clampZoom,
+           });
         }
       };
       viewport.moveCenter = (wx: number, wy: number) => {
-        viewport.position.x = viewport.screenWidth / 2 - wx * viewport.scale.x;
-        viewport.position.y = viewport.screenHeight / 2 - wy * viewport.scale.y;
+        setCameraCenterTarget({
+          centerX: wx,
+          centerY: wy,
+          scale: cameraMotionRef.current.targetZoom,
+        });
       };
       viewport.toWorld = (pt: Position) => {
         return {
@@ -1592,6 +1746,7 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
       const resizeObserver = new ResizeObserver(() => {
         if (!hostRef.current) return;
         viewport.resize(hostRef.current.clientWidth, hostRef.current.clientHeight);
+        syncViewportToCamera();
         liveContext.current.updateZoomHud();
       });
       resizeObserver.observe(hostRef.current);
@@ -1607,14 +1762,25 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
       };
 
       const handlePointerDown = (event: any) => {
+        const clickedStage = event.target === app.stage;
+        const shouldPanFromMoveTool =
+          clickedStage &&
+          liveContext.current.primaryTool === "move" &&
+          !liveContext.current.deleteMode &&
+          liveContext.current.addMode === "none";
+
         // Only pan on middle-click, or if the user clicks empty space in 'view' mode (handled by click events)
         if (
           event.button === 1 ||
           event.button === 2 ||
-          (liveContext.current.primaryTool === "move" &&
-            !liveContext.current.deleteMode &&
-            liveContext.current.addMode === "none")
+          shouldPanFromMoveTool
         ) {
+           const camera = cameraMotionRef.current;
+           camera.isPanning = true;
+           camera.hasTarget = false;
+           camera.vx = 0;
+           camera.vy = 0;
+           camera.lastTimestamp = performance.now();
            isPanning = true;
            lastPanPos = { x: event.global.x, y: event.global.y };
          }
@@ -1622,10 +1788,20 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
 
       const handlePointerMove = (event: any) => {
         if (isPanning) {
-           const dx = event.global.x - lastPanPos.x;
-           const dy = event.global.y - lastPanPos.y;
-           viewport.position.x += dx;
-           viewport.position.y += dy;
+           const now = performance.now();
+           const dx = (event.global.x - lastPanPos.x) * CAMERA_DRAG_SENSITIVITY;
+           const dy = (event.global.y - lastPanPos.y) * CAMERA_DRAG_SENSITIVITY;
+           const camera = cameraMotionRef.current;
+           const elapsed = Math.max(now - (camera.lastTimestamp ?? now), 1);
+           const velocityFactor = 16.6667 / elapsed;
+           camera.targetX += dx;
+           camera.targetY += dy;
+           camera.x = camera.targetX;
+           camera.y = camera.targetY;
+           camera.vx = dx * velocityFactor;
+           camera.vy = dy * velocityFactor;
+           camera.lastTimestamp = now;
+           syncViewportToCamera();
            lastPanPos = { x: event.global.x, y: event.global.y };
         } else if (dragRef.current) {
           const world = snapPoint(viewport.toWorld(event.global), liveContext.current.snapToGrid);
@@ -1641,6 +1817,8 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
 
       const handlePointerUp = () => {
         isPanning = false;
+        cameraMotionRef.current.isPanning = false;
+        ensureCameraLoop();
         void finalizeDrag();
       };
       
@@ -1648,13 +1826,14 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
         e.preventDefault();
         const pointer = { x: e.clientX, y: e.clientY };
         const worldPos = viewport.toWorld(pointer);
-        const factor = Math.sign(e.deltaY) * -0.1;
-        const newZoom = Math.max(0.14, Math.min(viewport.scale.x * (1 + factor), 3.8));
-        
-        viewport.scale.set(newZoom);
-        viewport.position.x = pointer.x - worldPos.x * newZoom;
-        viewport.position.y = pointer.y - worldPos.y * newZoom;
-        liveContext.current.updateZoomHud();
+        const camera = cameraMotionRef.current;
+        const nextZoom = clamp(camera.targetZoom * Math.exp(-e.deltaY * CAMERA_WHEEL_INTENSITY), CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+        camera.isPanning = false;
+        camera.hasTarget = true;
+        camera.targetZoom = nextZoom;
+        camera.targetX = pointer.x - worldPos.x * nextZoom;
+        camera.targetY = pointer.y - worldPos.y * nextZoom;
+        ensureCameraLoop();
       };
       hostRef.current.addEventListener("wheel", handleWheel, { passive: false });
 
@@ -1731,10 +1910,22 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
 
       pixiRef.current = { app, viewport, layers, modules: pixi, resizeObserver, handleWheel };
       sceneRef.current = cloneScene(agents, boardLinks, campaignNodes, relationships, map, fronts);
-      
+
+      cameraMotionRef.current = {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        targetX: 0,
+        targetY: 0,
+        targetZoom: 1,
+        vx: 0,
+        vy: 0,
+        isPanning: false,
+        hasTarget: false,
+        lastTimestamp: null,
+      };
+      syncViewportToCamera();
       liveContext.current.requestRender();
-      resetCamera();
-      initializedCameraRef.current = true;
       liveContext.current.updateZoomHud();
     };
 
@@ -1811,6 +2002,18 @@ export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(funct
       initializedCameraRef.current = true;
     }
   }, [fitToContent, isEmptyState]);
+
+  useEffect(() => {
+    if (!pixiRef.current) return;
+    if (isEmptyState) {
+      if (!initializedCameraRef.current) {
+        setCameraCenterTarget({ centerX: 0, centerY: 0, scale: 1 }, { immediate: true });
+        initializedCameraRef.current = true;
+      }
+      return;
+    }
+    initializedCameraRef.current = false;
+  }, [isEmptyState, setCameraCenterTarget]);
 
   const activeMode = addMode !== "none" ? addMode : connectionSourceKey ? "connect" : deleteMode ? "delete" : null;
   const canvasCursor = activeMode ? "crosshair" : "default";
