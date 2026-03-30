@@ -459,6 +459,7 @@ export function materializeCampaignSetupDraft(
         linkedRegionId: draft.regions[0]?.id ?? null,
         linkedSiteId: null,
         linkedFrontId: draft.fronts[0]?.id ?? null,
+        tags: ["setup", draft.generatedBy],
         status: "open",
       },
     ],

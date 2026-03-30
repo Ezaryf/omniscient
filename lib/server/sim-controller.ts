@@ -16,7 +16,7 @@ import {
 } from "@/lib/sim/snapshot";
 import type { ActionProposal, SimCommand, WorldState } from "@/lib/sim/types";
 import { applyEventImpacts, validateRuleChange } from "@/lib/sim/rules";
-import { getActionProposals } from "./ai/orchestrator";
+import { getActionProposals, generateNarrative } from "./ai/orchestrator";
 import type { SimulationStore } from "./store-types";
 import { materializeCampaignSetupDraft } from "@/lib/sim/setup";
 
@@ -112,6 +112,8 @@ export class SimController {
         return this.advanceFront(branch.id, command.frontId, command.delta, command.rationale);
       case "applySetup":
         return this.applySetup(branch.id, command.draft);
+      case "generateNarrative":
+        return this.generateNarrative(branch.id, aiConfig);
       default:
         return { status: 400, error: "Command not supported" };
     }
@@ -231,7 +233,7 @@ export class SimController {
       impact: rawEvent.impact ?? [],
       confidence: 0.95,
       tags: rawEvent.tags ?? ["manual"],
-      metadata: { ...(rawEvent.metadata ?? {}), generatedBy: "gm" },
+      metadata: { ...rawEvent.metadata, generatedBy: "gm" },
       sequence: 0,
     });
 
@@ -249,8 +251,52 @@ export class SimController {
       data: {
         worldState: nextState,
         delta: calculateStateDelta(oldState, nextState),
-        events: [event],
+        events: [event]
       },
+    };
+  }
+
+  private async generateNarrative(branchId: string, aiConfig: any): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+
+    const oldState = ensureWorldState(branch.latestState);
+    const narrativeResult = await generateNarrative(oldState, aiConfig);
+    
+    if (!narrativeResult) {
+      return { status: 500, error: "Failed to generate narrative." };
+    }
+
+    const nextState: WorldState = {
+      ...oldState,
+      gmNotes: [
+        ...(oldState.gmNotes || []),
+        {
+          id: `narrative-${Date.now()}`,
+          tick: oldState.tick,
+          title: `[Tick ${oldState.tick}] ${narrativeResult.title}`,
+          content: narrativeResult.summary,
+          linkedEventId: null,
+          linkedRegionId: null,
+          linkedSiteId: null,
+          linkedFrontId: null,
+          tags: ["narrative", "ai"],
+          status: "open",
+        }
+      ]
+    };
+    
+    branch.latestState = nextState;
+    branch.stateHash = await hashState(nextState);
+    await this.store.saveBranch(branch);
+
+    return {
+      status: 200,
+      data: {
+        worldState: nextState,
+        delta: calculateStateDelta(oldState, nextState),
+        narrative: narrativeResult
+      }
     };
   }
 
@@ -389,6 +435,7 @@ export class SimController {
               linkedRegionId: null,
               linkedSiteId: null,
               linkedFrontId: oldState.fronts.find((front) => `projection-front-${front.id}` === consequenceId)?.id ?? null,
+              tags: [],
               status: "acknowledged",
             },
             ...oldState.gmNotes,

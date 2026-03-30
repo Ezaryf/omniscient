@@ -1191,6 +1191,7 @@ export function applyCausalConsequences(state: WorldState, event: CausalEvent): 
       linkedRegionId: regionIds[0] ?? null,
       linkedSiteId: siteIds[0] ?? null,
       linkedFrontId: frontIds[0] ?? null,
+      tags: ["derived", "pinned"],
       status: "open",
     });
   }

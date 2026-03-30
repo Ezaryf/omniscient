@@ -297,6 +297,7 @@ export const GmNoteSchema = z.object({
   linkedRegionId: z.string().nullable().default(null),
   linkedSiteId: z.string().nullable().default(null),
   linkedFrontId: z.string().nullable().default(null),
+  tags: z.array(z.string()).default([]),
   status: z.enum(["open", "acknowledged", "resolved"]).default("open"),
 });
 export type GmNote = z.infer<typeof GmNoteSchema>;
@@ -786,6 +787,12 @@ export const SimCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("applySetup"),
     branchId: z.string(),
     draft: CampaignSetupDraftSchema,
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("generateNarrative"),
+    branchId: z.string(),
+    aiSettings: z.any().optional(),
     currentTick: z.number().int().min(0).optional(),
   }),
 ]);
