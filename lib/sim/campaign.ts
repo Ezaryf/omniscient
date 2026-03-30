@@ -745,6 +745,56 @@ function inferAffectedIds(
     }
   }
 
+  const endpointTouchesEntity = (entityId: string, endpoint: { type: string; id: string }) => {
+    if (endpoint.id === entityId) return true;
+
+    if (endpoint.type === "region") {
+      const agent = state.agents.find((candidate) => candidate.id === entityId);
+      return Boolean(agent && findRegionForAgent(state.map, agent)?.id === endpoint.id);
+    }
+
+    if (endpoint.type === "site") {
+      const agent = state.agents.find((candidate) => candidate.id === entityId);
+      return Boolean(agent && findSiteForPosition(state.map, agent.position)?.id === endpoint.id);
+    }
+
+    if (endpoint.type === "front") {
+      const agent = state.agents.find((candidate) => candidate.id === entityId);
+      const front = state.fronts.find((candidate) => candidate.id === endpoint.id);
+      return Boolean(
+        agent &&
+          front &&
+          ((front.factionId && agent.factionId === front.factionId) ||
+            (front.opposingFactionId && agent.factionId === front.opposingFactionId))
+      );
+    }
+
+    if (endpoint.type === "campaignNode") {
+      const node = state.campaignNodes.find((candidate) => candidate.id === endpoint.id);
+      const agent = state.agents.find((candidate) => candidate.id === entityId);
+      if (!node || !agent) return false;
+      return Boolean(
+        (node.factionId && agent.factionId === node.factionId) ||
+          (node.regionId && findRegionForAgent(state.map, agent)?.id === node.regionId) ||
+          (node.siteId && findSiteForPosition(state.map, agent.position)?.id === node.siteId)
+      );
+    }
+
+    return false;
+  };
+
+  for (const link of state.boardLinks ?? []) {
+    const touchesTrackedEntity = [...actorIds, ...targetIds].some(
+      (entityId) =>
+        endpointTouchesEntity(entityId, link.source) || endpointTouchesEntity(entityId, link.target)
+    );
+    if (!touchesTrackedEntity) continue;
+
+    affected.add(link.id);
+    affected.add(link.source.id);
+    affected.add(link.target.id);
+  }
+
   return Array.from(affected);
 }
 
@@ -903,6 +953,7 @@ function eventMagnitude(event: CausalEvent) {
 export function applyCausalConsequences(state: WorldState, event: CausalEvent): WorldState {
   const magnitude = eventMagnitude(event);
   const agents = structuredClone(state.agents);
+  const relationships = structuredClone(state.relationships);
   const map = structuredClone(state.map);
   const fronts = structuredClone(state.fronts);
   const notes = structuredClone(state.gmNotes);
@@ -1181,6 +1232,107 @@ export function applyCausalConsequences(state: WorldState, event: CausalEvent): 
     boardLinks.push(...nextLinks);
   }
 
+  if (typeof event.metadata.deleteAgentId === "string") {
+    const deletedAgentId = event.metadata.deleteAgentId;
+    const nextAgents = agents.filter((agent) => agent.id !== deletedAgentId);
+    const nextRelationships = relationships.filter(
+      (relationship) =>
+        relationship.sourceAgentId !== deletedAgentId && relationship.targetAgentId !== deletedAgentId
+    );
+    agents.length = 0;
+    agents.push(...nextAgents);
+    relationships.length = 0;
+    relationships.push(...nextRelationships);
+    const nextLinks = boardLinks.filter(
+      (link) =>
+        !(link.source.type === "agent" && link.source.id === deletedAgentId) &&
+        !(link.target.type === "agent" && link.target.id === deletedAgentId)
+    );
+    boardLinks.length = 0;
+    boardLinks.push(...nextLinks);
+  }
+
+  if (typeof event.metadata.deleteFrontId === "string") {
+    const deletedFrontId = event.metadata.deleteFrontId;
+    fronts.length = 0;
+    fronts.push(...fronts.filter((front) => front.id !== deletedFrontId));
+    const nextLinks = boardLinks.filter(
+      (link) =>
+        !(link.source.type === "front" && link.source.id === deletedFrontId) &&
+        !(link.target.type === "front" && link.target.id === deletedFrontId)
+    );
+    boardLinks.length = 0;
+    boardLinks.push(...nextLinks);
+  }
+
+  if (typeof event.metadata.deleteRouteId === "string") {
+    map.routes = map.routes.filter((route) => route.id !== event.metadata.deleteRouteId);
+  }
+
+  if (typeof event.metadata.deleteTokenId === "string") {
+    map.tokens = map.tokens.filter((token) => token.id !== event.metadata.deleteTokenId);
+  }
+
+  if (typeof event.metadata.deleteSiteId === "string") {
+    const deletedSiteId = event.metadata.deleteSiteId;
+    map.sites = map.sites.filter((site) => site.id !== deletedSiteId);
+    map.routes = map.routes.filter((route) => route.fromSiteId !== deletedSiteId && route.toSiteId !== deletedSiteId);
+    const nextLinks = boardLinks.filter(
+      (link) =>
+        !(link.source.type === "site" && link.source.id === deletedSiteId) &&
+        !(link.target.type === "site" && link.target.id === deletedSiteId)
+    );
+    boardLinks.length = 0;
+    boardLinks.push(...nextLinks);
+    map.tokens = map.tokens.map((token) => ({
+      ...token,
+      siteId: token.siteId === deletedSiteId ? null : token.siteId,
+    }));
+    campaignNodes.forEach((node) => {
+      if (node.siteId === deletedSiteId) node.siteId = null;
+    });
+  }
+
+  if (typeof event.metadata.deleteRegionId === "string") {
+    const deletedRegionId = event.metadata.deleteRegionId;
+    map.regions = map.regions.filter((region) => region.id !== deletedRegionId);
+    const deletedFrontIds = fronts.filter((front) => front.regionId === deletedRegionId).map((front) => front.id);
+    if (deletedFrontIds.length > 0) {
+      const nextFronts = fronts.filter((front) => front.regionId !== deletedRegionId);
+      fronts.length = 0;
+      fronts.push(...nextFronts);
+    }
+    const deletedSiteIds = map.sites.filter((site) => site.regionId === deletedRegionId).map((site) => site.id);
+    if (deletedSiteIds.length > 0) {
+      map.sites = map.sites.filter((site) => site.regionId !== deletedRegionId);
+      map.routes = map.routes.filter(
+        (route) => !deletedSiteIds.includes(route.fromSiteId) && !deletedSiteIds.includes(route.toSiteId)
+      );
+      map.tokens = map.tokens.map((token) => ({
+        ...token,
+        siteId: token.siteId && deletedSiteIds.includes(token.siteId) ? null : token.siteId,
+      }));
+    }
+    const nextLinks = boardLinks.filter((link) => {
+      if (link.source.type === "region" && link.source.id === deletedRegionId) return false;
+      if (link.target.type === "region" && link.target.id === deletedRegionId) return false;
+      if (link.source.type === "site" && deletedSiteIds.includes(link.source.id)) return false;
+      if (link.target.type === "site" && deletedSiteIds.includes(link.target.id)) return false;
+      if (link.source.type === "front" && deletedFrontIds.includes(link.source.id)) return false;
+      if (link.target.type === "front" && deletedFrontIds.includes(link.target.id)) return false;
+      return true;
+    });
+    boardLinks.length = 0;
+    boardLinks.push(...nextLinks);
+    map.tokens = map.tokens.map((token) => ({
+      ...token,
+      regionId: token.regionId === deletedRegionId ? null : token.regionId,
+    }));
+    campaignNodes.forEach((node) => {
+      if (node.regionId === deletedRegionId) node.regionId = null;
+    });
+  }
+
   if (typeof event.metadata.note === "string" && event.metadata.note.trim().length > 0) {
     notes.unshift({
       id: `note-${hashString(`${event.id}:${event.metadata.note}`)}`,
@@ -1199,6 +1351,7 @@ export function applyCausalConsequences(state: WorldState, event: CausalEvent): 
   const nextState = {
     ...state,
     agents,
+    relationships,
     map,
     fronts: fronts.map((front) => ({ ...front, status: frontStatus(front) })),
     gmNotes: notes.slice(0, 24),

@@ -44,6 +44,9 @@ export interface WorkspaceSettings {
     showRouteLabels: boolean;
     frontOverlayIntensity: "low" | "medium" | "high";
     projectionsDefault: boolean;
+    hiddenKeys: string[];
+    layoutAssist: boolean;
+    layoutSpacing: number;
   };
   timeline: {
     density: "compact" | "comfortable";
@@ -158,6 +161,9 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
     showRouteLabels: true,
     frontOverlayIntensity: "medium",
     projectionsDefault: false,
+    hiddenKeys: [],
+    layoutAssist: true,
+    layoutSpacing: 150,
   },
   timeline: {
     density: "comfortable",

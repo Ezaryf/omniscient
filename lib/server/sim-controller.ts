@@ -108,6 +108,18 @@ export class SimController {
         return this.deleteCampaignNode(branch.id, command.nodeId);
       case "deleteBoardLink":
         return this.deleteBoardLink(branch.id, command.linkId);
+      case "deleteRegion":
+        return this.deleteRegion(branch.id, command.regionId);
+      case "deleteSite":
+        return this.deleteSite(branch.id, command.siteId);
+      case "deleteRoute":
+        return this.deleteRoute(branch.id, command.routeId);
+      case "deleteToken":
+        return this.deleteToken(branch.id, command.tokenId);
+      case "deleteAgent":
+        return this.deleteAgent(branch.id, command.agentId);
+      case "deleteFront":
+        return this.deleteFront(branch.id, command.frontId);
       case "advanceFront":
         return this.advanceFront(branch.id, command.frontId, command.delta, command.rationale);
       case "applySetup":
@@ -998,8 +1010,8 @@ export class SimController {
     const branch = await this.store.getBranch(branchId);
     if (!branch) return { status: 404, error: "Branch not found" };
     const oldState = ensureWorldState(branch.latestState);
-    const node = oldState.campaignNodes.find((entry) => entry.id === nodeId && (entry.tags ?? []).includes("manual"));
-    if (!node) return { status: 404, error: "Manual campaign node not found" };
+    const node = oldState.campaignNodes.find((entry) => entry.id === nodeId);
+    if (!node) return { status: 404, error: "Campaign node not found" };
     const event = createCausalEvent(oldState, {
       tick: oldState.tick + 1,
       type: "injected",
@@ -1010,6 +1022,126 @@ export class SimController {
       metadata: {
         deleteCampaignNodeId: nodeId,
       },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteRegion(branchId: string, regionId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const region = oldState.map.regions.find((entry) => entry.id === regionId);
+    if (!region) return { status: 404, error: "Region not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${region.name} is removed from the map`,
+      confidence: 0.99,
+      tags: ["manual", "delete-region", region.kind],
+      invalidates: [regionId],
+      metadata: { deleteRegionId: regionId },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteSite(branchId: string, siteId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const site = oldState.map.sites.find((entry) => entry.id === siteId);
+    if (!site) return { status: 404, error: "Site not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${site.name} is removed from the map`,
+      confidence: 0.99,
+      tags: ["manual", "delete-site", site.kind],
+      invalidates: [siteId],
+      metadata: { deleteSiteId: siteId },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteRoute(branchId: string, routeId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const route = oldState.map.routes.find((entry) => entry.id === routeId);
+    if (!route) return { status: 404, error: "Route not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${route.name} is removed from the map`,
+      confidence: 0.99,
+      tags: ["manual", "delete-route"],
+      invalidates: [routeId],
+      metadata: { deleteRouteId: routeId },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteToken(branchId: string, tokenId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const token = oldState.map.tokens.find((entry) => entry.id === tokenId);
+    if (!token) return { status: 404, error: "Token not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${token.name} is removed from the map`,
+      confidence: 0.99,
+      tags: ["manual", "delete-token", token.kind],
+      invalidates: [tokenId],
+      metadata: { deleteTokenId: tokenId },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteAgent(branchId: string, agentId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const agent = oldState.agents.find((entry) => entry.id === agentId);
+    if (!agent) return { status: 404, error: "Agent not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${agent.name} is removed from the campaign board`,
+      confidence: 0.99,
+      tags: ["manual", "delete-agent"],
+      invalidates: [agentId],
+      metadata: { deleteAgentId: agentId },
+      impact: [],
+      sequence: 0,
+    });
+    return this.commitCanvasMutation(branch, oldState, event);
+  }
+
+  private async deleteFront(branchId: string, frontId: string): Promise<SimControllerResponse> {
+    const branch = await this.store.getBranch(branchId);
+    if (!branch) return { status: 404, error: "Branch not found" };
+    const oldState = ensureWorldState(branch.latestState);
+    const front = oldState.fronts.find((entry) => entry.id === frontId);
+    if (!front) return { status: 404, error: "Front not found" };
+    const event = createCausalEvent(oldState, {
+      tick: oldState.tick + 1,
+      type: "injected",
+      description: `${front.name} is removed from the campaign board`,
+      confidence: 0.99,
+      tags: ["manual", "delete-front"],
+      invalidates: [frontId],
+      metadata: { deleteFrontId: frontId },
       impact: [],
       sequence: 0,
     });

@@ -1,6 +1,7 @@
 import type {
   ActionProposal,
   Agent,
+  BoardLink,
   AgentMemoryEntry,
   CausalEvent,
   Modifier,
@@ -152,11 +153,68 @@ function generateHeuristicActions(
 
   for (const agent of aliveAgents) {
     if (!chance(0.62, rng)) continue;
-    const proposal = buildProposalFromIntent(agent, worldState, rng);
+    const proposal = applyBoardLinkBias(buildProposalFromIntent(agent, worldState, rng), worldState, rng);
     if (proposal) proposals.push(proposal);
   }
 
   return proposals;
+}
+
+function findAgentBoardLink(
+  boardLinks: BoardLink[],
+  sourceAgentId: string,
+  targetAgentId: string
+) {
+  return boardLinks.find(
+    (link) =>
+      link.source.type === "agent" &&
+      link.target.type === "agent" &&
+      ((link.source.id === sourceAgentId && link.target.id === targetAgentId) ||
+        (link.source.id === targetAgentId && link.target.id === sourceAgentId))
+  );
+}
+
+function applyBoardLinkBias(
+  proposal: ActionProposal | null,
+  worldState: WorldState,
+  rng: () => number
+): ActionProposal | null {
+  if (!proposal || !proposal.targetAgentId) return proposal;
+
+  const link = findAgentBoardLink(worldState.boardLinks ?? [], proposal.agentId, proposal.targetAgentId);
+  if (!link) return proposal;
+
+  switch (link.type) {
+    case "alliance":
+      return {
+        ...proposal,
+        actionType: chance(0.72, rng) ? "ally" : "negotiate",
+        confidence: clamp(proposal.confidence + 0.18, 0.3, 0.98),
+        rationale: `${proposal.rationale} Board connection marks this relationship as allied.`,
+      };
+    case "conflict":
+      return {
+        ...proposal,
+        actionType: chance(0.72, rng) ? "attack" : "defend",
+        confidence: clamp(proposal.confidence + 0.2, 0.3, 0.98),
+        rationale: `${proposal.rationale} Board connection marks this relationship as hostile.`,
+      };
+    case "dependency":
+      return {
+        ...proposal,
+        actionType: chance(0.6, rng) ? "trade" : "defend",
+        confidence: clamp(proposal.confidence + 0.12, 0.3, 0.98),
+        rationale: `${proposal.rationale} Board connection marks this relationship as dependent.`,
+      };
+    case "causal":
+      return {
+        ...proposal,
+        confidence: clamp(proposal.confidence + 0.08, 0.3, 0.98),
+        rationale: `${proposal.rationale} Board connection marks this relationship as influential.`,
+      };
+    default:
+      return proposal;
+  }
 }
 
 function resolveProposal(

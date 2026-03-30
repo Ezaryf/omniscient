@@ -776,6 +776,42 @@ export const SimCommandSchema = z.discriminatedUnion("type", [
     currentTick: z.number().int().min(0).optional(),
   }),
   z.object({
+    type: z.literal("deleteRegion"),
+    branchId: z.string(),
+    regionId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("deleteSite"),
+    branchId: z.string(),
+    siteId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("deleteRoute"),
+    branchId: z.string(),
+    routeId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("deleteToken"),
+    branchId: z.string(),
+    tokenId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("deleteAgent"),
+    branchId: z.string(),
+    agentId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    type: z.literal("deleteFront"),
+    branchId: z.string(),
+    frontId: z.string(),
+    currentTick: z.number().int().min(0).optional(),
+  }),
+  z.object({
     type: z.literal("advanceFront"),
     branchId: z.string(),
     frontId: z.string(),
