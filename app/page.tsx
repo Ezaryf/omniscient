@@ -1,69 +1,25 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowRight, GitBranch, Orbit, Sparkles } from "lucide-react";
-import { CreateSimulationModal } from "@/components/dashboard/create-simulation-modal";
+import { Orbit } from "lucide-react";
 import { AppShell } from "@/components/ui/app-shell";
-import { Button } from "@/components/ui/button";
+import { HomeActions } from "@/components/home/home-actions";
+import { auth } from "@/lib/auth";
+import { getStore } from "@/lib/server/store";
 
-interface Project {
-  id: string;
-  name: string;
-  description: string;
-  createdAt: string;
-}
-
-export default function HomePage() {
-  const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isCreating, setIsCreating] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/projects")
-      .then((r) => r.json())
-      .then((data) => {
-        setProjects(data.projects ?? []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  const handleCreateSimulation = async (name: string, description: string) => {
-    setIsCreating(true);
+export default async function HomePage() {
+  const session = await auth();
+  
+  let projectCount = 0;
+  if (session?.user?.id) {
     try {
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
-      });
-
-      const data = await res.json();
-      if (data.project?.id) {
-        router.push(
-          data.branchId
-            ? `/workspace?projectId=${data.project.id}&branchId=${data.branchId}&setup=1`
-            : `/workspace?projectId=${data.project.id}&setup=1`
-        );
-      }
+      const store = getStore();
+      const projects = await store.listProjects();
+      projectCount = projects.length;
     } catch (err) {
-      console.error("Failed to create simulation:", err);
-    } finally {
-      setIsCreating(false);
+      console.error("Failed to load projects:", err);
     }
-  };
+  }
 
   return (
     <AppShell>
-      <CreateSimulationModal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onSubmit={handleCreateSimulation}
-      />
-
       <div className="page-frame flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center py-20">
         <div className="flex flex-col items-center text-center max-w-3xl px-4 space-y-8">
           
@@ -85,38 +41,7 @@ export default function HomePage() {
             fronts, and fallout evolve from the same simulation truth.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8 w-full max-w-md">
-            <Button 
-              variant="primary" 
-              size="lg" 
-              className="w-full sm:w-auto h-14 px-8 text-base shadow-[0_0_20px_-5px_var(--accent-primary)]/30 hover:shadow-[0_0_30px_-5px_var(--accent-primary)]/50 transition-shadow"
-              onClick={() => setShowCreateModal(true)} 
-              disabled={loading || isCreating}
-            >
-              {isCreating ? "Initializing..." : "New Simulation"}
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-
-            <Button 
-              variant="outline" 
-              size="lg" 
-              className="w-full sm:w-auto h-14 px-8 text-base border-(--border-strong) hover:bg-(--bg-elevated)"
-              asChild
-            >
-              <Link href="/dashboard">
-                <GitBranch className="mr-2 h-4 w-4 text-(--text-secondary)" />
-                Open Dashboard
-              </Link>
-            </Button>
-          </div>
-
-          {!loading && projects.length > 0 && (
-            <div className="pt-8 flex items-center gap-2 text-sm text-(--text-muted) animate-in fade-in slide-in-from-bottom-2">
-              <Sparkles className="h-3 w-3 text-yellow-500/70" />
-              <span>You have {projects.length} active simulation{projects.length > 1 ? 's' : ''} running.</span>
-            </div>
-          )}
-
+          <HomeActions projectCount={projectCount} />
         </div>
       </div>
     </AppShell>
