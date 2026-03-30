@@ -95,7 +95,7 @@ describe("Simulation Engine", () => {
     const state = createTestWorldState();
     state.rules.trustDecay = 0.05;
     const rng = createRng(DEFAULT_SEED);
-    const result = tick(state, rng);
+    const result = tick(state, rng, []);
 
     // Trust should have decayed
     const rel = result.worldState.relationships[0];

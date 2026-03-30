@@ -2,11 +2,6 @@ import { expect, test } from "@playwright/test";
 
 test("workspace board supports add, inspect, link, and remove flows", async ({ page }) => {
   const baseUrl = process.env.BASE_URL ?? "http://127.0.0.1:3010";
-  const dialogs: string[] = [];
-  page.on("dialog", async (dialog) => {
-    dialogs.push(dialog.message());
-    await dialog.accept();
-  });
 
   await page.goto(`${baseUrl}/workspace?projectId=proj-demo`);
   await expect(page.getByText("Campaign Board")).toBeVisible();
@@ -55,7 +50,9 @@ test("workspace board supports add, inspect, link, and remove flows", async ({ p
   await expect(page.getByText("Event 1")).toBeVisible();
   await expect(page.getByText(/^causal$/i)).toBeVisible();
 
-  await page.getByRole("button", { name: "Remove" }).click();
-  await expect(dialogs.length).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Delete Node" }).click();
+  await expect(page.getByText("Confirm Removal")).toBeVisible();
+  await page.getByRole("button", { name: /^Delete$/ }).click();
+  await expect(page.getByText(/removed from the board/i)).toBeVisible();
   await expect(page.getByText("Select something on the board")).toBeVisible();
 });
