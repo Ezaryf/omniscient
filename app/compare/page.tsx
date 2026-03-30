@@ -213,7 +213,12 @@ function CompareContent() {
         ) : null}
 
         {diffData && !isLoading ? (
-          <BranchDiff branchA={diffData.branchA} branchB={diffData.branchB} divergence={diffData.divergence} />
+          <BranchDiff
+            branchA={diffData.branchA}
+            branchB={diffData.branchB}
+            divergence={diffData.divergence}
+            workbench={diffData.workbench}
+          />
         ) : null}
 
         {!diffData && !isLoading ? (

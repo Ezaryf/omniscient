@@ -106,23 +106,23 @@ export function CreateSimulationModal({
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="overflow-hidden bg-[var(--bg-dock)]">
         <DialogHeader className="border-b border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-          <Badge variant="accent" className="w-fit">New campaign</Badge>
+          <Badge variant="accent" className="w-fit">New simulation</Badge>
           <DialogTitle className="text-[2rem] tracking-[-0.05em]">Forge a fresh timeline</DialogTitle>
           <DialogDescription className="max-w-xl">
-            Start with a strong title, add a cinematic premise, and open directly into guided setup
-            so the first consequence can take shape without demo clutter.
+            Start with a clear title, generate an editable high-stakes premise, and move directly
+            into guided setup so the first branch has structure before it has spectacle.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 p-6">
           <section className="space-y-2">
             <label htmlFor="sim-name" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-              Simulation name
+              Title
             </label>
             <Input
               id="sim-name"
               type="text"
-              placeholder="e.g. Sun Wu King vs Zeus"
+              placeholder="e.g. Fracture at the Glass Strait"
               value={name}
               onChange={(event) => setName(event.target.value)}
               autoFocus
@@ -133,7 +133,7 @@ export function CreateSimulationModal({
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <label htmlFor="sim-desc" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                Short description
+                Scenario premise
               </label>
               <Button
                 variant="ghost"
@@ -148,7 +148,7 @@ export function CreateSimulationModal({
             </div>
             <Textarea
               id="sim-desc"
-              placeholder="What collision, crisis, or opening pressure should this timeline revolve around?"
+              placeholder="Describe the trigger, the parties under tension, and why the system is likely to escalate."
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={4}

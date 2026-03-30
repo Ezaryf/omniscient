@@ -123,8 +123,8 @@ export default function DashboardPage() {
             <div className="space-y-2">
               <h1 className="page-title">Command your branching worlds.</h1>
               <p className="page-subtitle">
-                Review live simulations, reopen volatile timelines, and drop back into the next
-                consequence with a cleaner, denser campaign library.
+                Review active simulations, reopen volatile timelines, and move from library to
+                setup to live branch control without losing the causal thread.
               </p>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStore } from "@/lib/server/store";
 import { detectDivergence } from "@/lib/sim/branch";
+import { buildDivergenceWorkbench } from "@/lib/sim/analysis";
 import { auth } from "@/lib/auth";
 
 /**
@@ -43,10 +44,21 @@ export async function GET(request: NextRequest) {
   const eventsB = await store.getEvents(branchBId) || [];
 
   const divergence = detectDivergence(branchA, branchB, eventsA, eventsB);
+  const workbench = buildDivergenceWorkbench({
+    branchA,
+    branchB,
+    commonAncestorTick: divergence.commonAncestorTick,
+    branchAEvents: divergence.branchAEvents,
+    branchBEvents: divergence.branchBEvents,
+    frontDiffCount: divergence.frontDiffs.length,
+    routeDiffCount: divergence.routeDiffs.length,
+    agentDiffCount: divergence.agentDiffs.length,
+  });
 
   return NextResponse.json({
     branchA: { id: branchA.id, name: branchA.name, tick: branchA.currentTick },
     branchB: { id: branchB.id, name: branchB.name, tick: branchB.currentTick },
     divergence,
+    workbench,
   });
 }

@@ -9,6 +9,8 @@ import { AppShell } from "@/components/ui/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { buildInsightCards } from "@/lib/sim/analysis";
+import type { WorldState } from "@/lib/sim/types";
 
 interface InsightBranch {
   id: string;
@@ -43,35 +45,10 @@ function InsightsContent() {
     fetch(`/api/branches/detail?id=${activeBranchId}`)
       .then((response) => response.json())
       .then((data) => {
-        const worldState = data.branch?.latestState;
+        const worldState = data.branch?.latestState as WorldState | undefined;
         if (!worldState) return;
 
-        const projectionCards = (worldState.projections ?? []).map((projection: any) => ({
-          title: projection.title,
-          summary: projection.summary,
-          evidence: projection.evidence ?? [],
-          confidence: projection.confidence,
-          generatedBy: "heuristic" as const,
-          tick: projection.tick,
-        }));
-
-        const frontCards = (worldState.fronts ?? [])
-          .filter((front: any) => front.status !== "resolved")
-          .slice(0, 3)
-          .map((front: any) => ({
-            title: front.name,
-            summary: `${front.stakes}. Progress is at ${Math.round(front.progress * 100)}% and pressure is at ${Math.round(front.pressure * 100)}%.`,
-            evidence: [
-              `Status: ${front.status}`,
-              `Progress ${Math.round(front.progress * 100)}%`,
-              `Pressure ${Math.round(front.pressure * 100)}%`,
-            ],
-            confidence: 0.68,
-            generatedBy: "heuristic" as const,
-            tick: worldState.tick,
-          }));
-
-        setInsights([...projectionCards, ...frontCards]);
+        setInsights(buildInsightCards(worldState));
       })
       .catch(console.error);
   }, [activeBranchId]);
@@ -90,7 +67,8 @@ function InsightsContent() {
             <div className="space-y-2">
               <h1 className="page-title">Surface the pressure that deserves prep.</h1>
               <p className="page-subtitle">
-                Prep-facing warnings, vulnerable routes, and fronts most likely to reshape the campaign.
+                Prep-facing warnings, causal chains, unstable relationships, and hidden pressure
+                that explain where this branch is starting to bend.
               </p>
             </div>
           </div>

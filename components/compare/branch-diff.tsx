@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { AnalysisCard } from "@/lib/sim/analysis";
 import type {
   AgentStateDiff,
   ConsequenceContrast,
@@ -15,6 +16,7 @@ interface BranchDiffProps {
   readonly branchB: { id: string; name: string; tick: number };
   readonly divergence: {
     readonly commonAncestorTick: number;
+    readonly divergencePointTick: number;
     readonly agentDiffs: AgentStateDiff[];
     readonly frontDiffs: FrontStateDiff[];
     readonly routeDiffs: RouteStateDiff[];
@@ -22,9 +24,14 @@ interface BranchDiffProps {
     readonly branchAEvents: SimEvent[];
     readonly branchBEvents: SimEvent[];
   };
+  readonly workbench?: {
+    readonly overview: AnalysisCard[];
+    readonly uniqueEventsA: SimEvent[];
+    readonly uniqueEventsB: SimEvent[];
+  };
 }
 
-export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
+export function BranchDiff({ branchA, branchB, divergence, workbench }: BranchDiffProps) {
   const hasDivergence =
     divergence.agentDiffs.length > 0 ||
     divergence.frontDiffs.length > 0 ||
@@ -42,9 +49,25 @@ export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
             </span>
             <BranchBadge name={branchB.name} tick={branchB.tick} />
           </div>
-          <Badge>Shared history until T{divergence.commonAncestorTick}</Badge>
+          <div className="flex flex-wrap gap-2">
+            <Badge>Shared history until T{divergence.commonAncestorTick}</Badge>
+            <Badge variant="accent">
+              {divergence.agentDiffs.length + divergence.frontDiffs.length + divergence.routeDiffs.length} tracked deltas
+            </Badge>
+          </div>
         </CardContent>
       </Card>
+
+      {workbench?.overview?.length ? (
+        <section className="grid gap-3">
+          <SectionHeading title="Divergence workbench" />
+          <div className="grid gap-3 xl:grid-cols-2">
+            {workbench.overview.map((card) => (
+              <AnalysisCardView key={card.id} card={card} />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {hasDivergence ? (
         <section className="grid gap-3">
@@ -108,11 +131,11 @@ export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
                 <CardContent className="grid gap-3 text-sm text-[var(--text-secondary)]">
                   <MetricRow
                     label={branchA.name}
-                    value={`${Math.round(front.progressA * 100)} progress / ${Math.round(front.pressureA * 100)} pressure`}
+                    value={`${Math.round(front.progressA * 100)} progress | ${Math.round(front.pressureA * 100)} pressure`}
                   />
                   <MetricRow
                     label={branchB.name}
-                    value={`${Math.round(front.progressB * 100)} progress / ${Math.round(front.pressureB * 100)} pressure`}
+                    value={`${Math.round(front.progressB * 100)} progress | ${Math.round(front.pressureB * 100)} pressure`}
                   />
                 </CardContent>
               </Card>
@@ -133,11 +156,11 @@ export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
                 <CardContent className="grid gap-3 text-sm text-[var(--text-secondary)]">
                   <MetricRow
                     label={branchA.name}
-                    value={`${route.statusA} · ${Math.round(route.integrityA * 100)} integrity · ${Math.round(route.riskA * 100)} risk`}
+                    value={`${route.statusA} | ${Math.round(route.integrityA * 100)} integrity | ${Math.round(route.riskA * 100)} risk`}
                   />
                   <MetricRow
                     label={branchB.name}
-                    value={`${route.statusB} · ${Math.round(route.integrityB * 100)} integrity · ${Math.round(route.riskB * 100)} risk`}
+                    value={`${route.statusB} | ${Math.round(route.integrityB * 100)} integrity | ${Math.round(route.riskB * 100)} risk`}
                   />
                 </CardContent>
               </Card>
@@ -165,7 +188,7 @@ export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
                       <span className="font-mono text-[var(--text-primary)]">
                         {field.valueA.toFixed(1)}
                       </span>
-                      <span className="hidden text-[var(--text-muted)] md:inline">→</span>
+                      <span className="hidden text-[var(--text-muted)] md:inline">-&gt;</span>
                       <span className="font-mono text-[var(--text-primary)]">
                         {field.valueB.toFixed(1)}
                       </span>
@@ -183,10 +206,55 @@ export function BranchDiff({ branchA, branchB, divergence }: BranchDiffProps) {
       ) : null}
 
       <div className="grid gap-3 xl:grid-cols-2">
-        <EventColumn branch={branchA.name} events={divergence.branchAEvents} />
-        <EventColumn branch={branchB.name} events={divergence.branchBEvents} />
+        <EventColumn
+          branch={branchA.name}
+          events={workbench?.uniqueEventsA?.length ? workbench.uniqueEventsA : divergence.branchAEvents}
+          helperLabel="unique consequences"
+        />
+        <EventColumn
+          branch={branchB.name}
+          events={workbench?.uniqueEventsB?.length ? workbench.uniqueEventsB : divergence.branchBEvents}
+          helperLabel="unique consequences"
+        />
       </div>
     </div>
+  );
+}
+
+function AnalysisCardView({ card }: { card: AnalysisCard }) {
+  const badgeVariant =
+    card.tone === "warning"
+      ? "warning"
+      : card.tone === "accent"
+        ? "accent"
+        : card.tone === "success"
+          ? "success"
+          : "default";
+
+  return (
+    <Card className="bg-[var(--bg-panel)]/92">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>{card.title}</CardTitle>
+          <Badge variant={badgeVariant}>{Math.round(card.confidence * 100)}%</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm leading-6 text-[var(--text-secondary)]">{card.summary}</p>
+        {card.evidence.length > 0 ? (
+          <ul className="grid gap-2">
+            {card.evidence.map((item) => (
+              <li
+                key={item}
+                className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2 text-sm text-[var(--text-secondary)]"
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -237,17 +305,25 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function EventColumn({ branch, events }: { readonly branch: string; readonly events: SimEvent[] }) {
+function EventColumn({
+  branch,
+  events,
+  helperLabel,
+}: {
+  readonly branch: string;
+  readonly events: SimEvent[];
+  readonly helperLabel?: string;
+}) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-3">
           <CardTitle>{branch}</CardTitle>
-          <Badge>{events.length} events</Badge>
+          <Badge>{events.length} {helperLabel ?? "events"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="grid gap-2">
-        {events.slice(-15).map((event) => (
+        {events.slice(0, 15).map((event) => (
           <div
             key={event.id}
             className="grid gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/68 px-3 py-2"
