@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { BoardSelection, CampaignSetupDraft, CanvasBinding, TimelineBranch } from "@/lib/sim/types";
@@ -15,7 +15,7 @@ import { FreeformCanvas } from "@/components/workspace/freeform-canvas";
 import { ScenarioPanel } from "@/components/workspace/scenario-panel";
 import { TimelineRail } from "@/components/workspace/timeline-rail";
 import { useWorkspaceLayout } from "@/components/workspace/use-workspace-layout";
-import { WorldCanvas } from "@/components/workspace/world-canvas";
+import { WorldCanvas, type BoardTool, type WorldCanvasHandle, type WorldCanvasUiState } from "@/components/workspace/world-canvas";
 import { InjectEventModal } from "@/components/workspace/inject-event-modal";
 import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
 import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
@@ -65,12 +65,27 @@ function WorkspaceContent() {
   const shouldOpenSetupFromUrl = searchParams.get("setup") === "1";
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoplayArmedRef = useRef(true);
+  const syncInFlightRef = useRef(false);
+  const worldCanvasRef = useRef<WorldCanvasHandle | null>(null);
 
   const [showInjectModal, setShowInjectModal] = useState(false);
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [showSetup, setShowSetup] = useState(shouldOpenSetupFromUrl);
   const [selectedCanvasBinding, setSelectedCanvasBinding] = useState<CanvasBinding | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<BoardSelection | null>(null);
+  const [boardUiState, setBoardUiState] = useState<WorldCanvasUiState>({
+    activeTool: (searchParams.get("tool") as BoardTool | null) ?? "inspect",
+    linkType: "causal",
+    zoomPercent: 100,
+    showGrid: true,
+    showRelationships: true,
+    showFronts: true,
+    showRegions: true,
+    snapToGrid: true,
+    labelDensity: "balanced",
+    canDeleteSelection: false,
+    canStartLinkFromSelection: false,
+  });
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [deleteFeedback, setDeleteFeedback] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
   const [isDeletingSelection, setIsDeletingSelection] = useState(false);
@@ -122,12 +137,15 @@ function WorkspaceContent() {
 
   const updateWorkspaceQuery = useCallback(
     (patch: Record<string, string | null>) => {
-      const nextParams = new URLSearchParams(searchParams.toString());
+      const currentQuery = searchParams.toString();
+      const nextParams = new URLSearchParams(currentQuery);
       for (const [key, value] of Object.entries(patch)) {
         if (!value) nextParams.delete(key);
         else nextParams.set(key, value);
       }
-      router.replace(`${pathname}?${nextParams.toString()}` as any, { scroll: false });
+      const nextQuery = nextParams.toString();
+      if (nextQuery === currentQuery) return;
+      router.replace(`${pathname}?${nextQuery}` as any, { scroll: false });
     },
     [pathname, router, searchParams]
   );
@@ -142,6 +160,15 @@ function WorkspaceContent() {
     },
     [setBranches]
   );
+
+  useEffect(() => {
+    if (workspaceSurface !== "map") return;
+    updateWorkspaceQuery({
+      tool: boardUiState.activeTool === "inspect" ? null : boardUiState.activeTool,
+      selectionType: selectedEntity?.type ?? null,
+      selectionId: selectedEntity?.id ?? null,
+    });
+  }, [boardUiState.activeTool, selectedEntity, updateWorkspaceQuery, workspaceSurface]);
 
   useEffect(() => {
     setProject(projectId);
@@ -289,6 +316,9 @@ function WorkspaceContent() {
   }, [addEvents, applyDelta, setLastProposals, setStatus, setWorldState]);
 
   const handlePlay = useCallback(() => {
+    if (playIntervalRef.current) {
+      clearInterval(playIntervalRef.current);
+    }
     setStatus("playing");
     playIntervalRef.current = setInterval(() => {
       void executeTick();
@@ -662,16 +692,59 @@ function WorkspaceContent() {
     }
   }, [branchId, handlePlay, isNewSimulation, settings.simulation.autoplayOnLaunch, setupStatus]);
 
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      const state = useSimulationStore.getState();
-      if (state.status === "idle" || state.status === "paused") {
-        await sync();
-      }
-    }, 5000);
+  const runSyncHeartbeat = useEffectEvent(async () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return;
+    }
 
-    return () => clearInterval(interval);
-  }, [sync]);
+    const state = useSimulationStore.getState();
+    if (state.status !== "idle" && state.status !== "paused") {
+      return;
+    }
+    if (syncInFlightRef.current) {
+      return;
+    }
+
+    syncInFlightRef.current = true;
+    try {
+      await state.sync();
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = () => {
+      timeout = setTimeout(async () => {
+        await runSyncHeartbeat();
+        if (!cancelled) {
+          schedule();
+        }
+      }, 5000);
+    };
+
+    schedule();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void runSyncHeartbeat();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      syncInFlightRef.current = false;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -860,6 +933,7 @@ function WorkspaceContent() {
             />
           ) : (
             <WorldCanvas
+              ref={worldCanvasRef}
               agents={worldState?.agents ?? []}
               boardLinks={worldState?.boardLinks ?? []}
               campaignNodes={worldState?.campaignNodes ?? []}
@@ -881,6 +955,8 @@ function WorkspaceContent() {
               onCreateBoardLink={onCreateBoardLink}
               onCreateCampaignNode={onCreateCampaignNode}
               onRequestDeleteSelection={requestDeleteSelection}
+              initialTool={(searchParams.get("tool") as BoardTool | null) ?? "inspect"}
+              onToolStateChange={setBoardUiState}
             />
           )}
         </div>
@@ -905,6 +981,11 @@ function WorkspaceContent() {
               recentEvents={recentEvents}
               onDeleteCampaignNode={onDeleteCampaignNode}
               onDeleteBoardLink={onDeleteBoardLink}
+              boardUiState={boardUiState}
+              onFocusSelection={() => worldCanvasRef.current?.focusSelection()}
+              onBeginLinkFromSelection={() => worldCanvasRef.current?.beginLinkFromSelection()}
+              onClearSelection={() => setSelectedEntity(null)}
+              onSetBoardTool={(tool) => worldCanvasRef.current?.setBoardTool(tool)}
             />
           )}
         </div>

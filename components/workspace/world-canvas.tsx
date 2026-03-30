@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import * as pixi from "pixi.js";
 import {
-  ChevronDown, Crosshair, Mouse, Eye, Minus, Plus, RotateCcw, ScanSearch,
+  Crosshair, MousePointer2, Hand, Minus, Plus, RotateCcw, ScanSearch,
   Grid3x3, Magnet, Hexagon, MapPin, CircleDot, Link2, Tag, Trash2, LocateFixed,
+  Workflow, UserRound, Shield, FlagTriangleRight, Zap, MapPinned,
+  Eye, EyeOff,
 } from "lucide-react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { useSimulationStore } from "@/lib/stores/simulation-store";
 import type { Agent, BoardLink, BoardLinkType, BoardSelection, CampaignNode, FrontClock, MapLayer, Position, RelationshipEdge, WorldState } from "@/lib/sim/types";
 
@@ -168,6 +171,7 @@ interface RenderLayerOptions {
   onSelectConnectionTarget: (selection: ConnectableSelection) => Promise<void>;
   setDragTarget: (target: DragTarget, startWorld: Position) => void;
   editMode: boolean;
+  deleteMode: boolean;
   addMode: AddMode;
   labelDensity: "minimal" | "balanced" | "dense";
   showRegionLabels: boolean;
@@ -175,6 +179,9 @@ interface RenderLayerOptions {
   showTokenLabels: boolean;
   frontAlpha: number;
   showGrid: boolean;
+  showRelationships: boolean;
+  showFronts: boolean;
+  showRegions: boolean;
   showProjections: boolean;
   projectionAgents: Array<{ id: string; position: Position }>;
   connectionSourceKey: string | null;
@@ -208,6 +215,8 @@ interface WorldCanvasProps {
   readonly onCreateBoardLink: (payload: { linkType: BoardLinkType; source: { type: "agent" | "campaignNode" | "region" | "site" | "front"; id: string }; target: { type: "agent" | "campaignNode" | "region" | "site" | "front"; id: string }; label?: string | null }) => Promise<void>;
   readonly onCreateCampaignNode: (payload: { name: string; kind: "agent" | "faction" | "front" | "event" | "place"; x: number; y: number; regionId?: string | null; siteId?: string | null }) => Promise<void>;
   readonly onRequestDeleteSelection: (selection: BoardSelection | null) => void;
+  readonly initialTool?: BoardTool;
+  readonly onToolStateChange?: (state: WorldCanvasUiState) => void;
 }
 
 type DragTarget =
@@ -222,6 +231,63 @@ type DragTarget =
 
 type AddMode = "none" | "region" | "site" | "token" | "agent" | "place" | "faction" | "front" | "event";
 type ConnectableSelection = { type: "agent" | "campaignNode" | "region" | "site" | "front"; id: string };
+export type BoardTool = "inspect" | "move" | "connect" | "delete" | Exclude<AddMode, "none">;
+
+export interface WorldCanvasUiState {
+  activeTool: BoardTool;
+  linkType: BoardLinkType;
+  zoomPercent: number;
+  showGrid: boolean;
+  showRelationships: boolean;
+  showFronts: boolean;
+  showRegions: boolean;
+  snapToGrid: boolean;
+  labelDensity: "minimal" | "balanced" | "dense";
+  canDeleteSelection: boolean;
+  canStartLinkFromSelection: boolean;
+}
+
+export interface WorldCanvasHandle {
+  focusSelection: () => void;
+  beginLinkFromSelection: () => void;
+  clearSelection: () => void;
+  fitToContent: () => void;
+  resetCamera: () => void;
+  setBoardTool: (tool: BoardTool) => void;
+}
+
+const TOOL_ICON_MAP: Record<BoardTool, typeof MousePointer2> = {
+  inspect: MousePointer2,
+  move: Hand,
+  connect: Workflow,
+  delete: Trash2,
+  agent: UserRound,
+  faction: Shield,
+  front: FlagTriangleRight,
+  event: Zap,
+  place: MapPin,
+  region: Hexagon,
+  site: MapPinned,
+  token: CircleDot,
+};
+
+const INTERACTION_TOOL_CONFIG: Array<{ tool: BoardTool; label: string; shortcut: string; destructive?: boolean }> = [
+  { tool: "inspect", label: "Inspect", shortcut: "V" },
+  { tool: "move", label: "Move and pan", shortcut: "M" },
+  { tool: "connect", label: "Link nodes", shortcut: "C" },
+  { tool: "delete", label: "Delete", shortcut: "D", destructive: true },
+];
+
+const CREATION_TOOL_CONFIG: Array<{ tool: BoardTool; label: string; shortcut: string }> = [
+  { tool: "agent", label: "Add actor", shortcut: "A" },
+  { tool: "faction", label: "Add faction", shortcut: "" },
+  { tool: "front", label: "Add front", shortcut: "" },
+  { tool: "event", label: "Add event", shortcut: "" },
+  { tool: "place", label: "Add place", shortcut: "" },
+  { tool: "region", label: "Add region", shortcut: "R" },
+  { tool: "site", label: "Add site", shortcut: "S" },
+  { tool: "token", label: "Add token", shortcut: "T" },
+];
 
 const WORLD_EXTENT = 20000;
 const CAMERA_PADDING = 72;
@@ -419,7 +485,7 @@ function resolveConnectableLabel(scene: SceneSnapshot, selection: ConnectableSel
   }
 }
 
-export function WorldCanvas({
+export const WorldCanvas = forwardRef<WorldCanvasHandle, WorldCanvasProps>(function WorldCanvas({
   agents,
   boardLinks,
   campaignNodes,
@@ -441,10 +507,10 @@ export function WorldCanvas({
   onCreateBoardLink,
   onCreateCampaignNode,
   onRequestDeleteSelection,
-}: WorldCanvasProps) {
+  initialTool = "inspect",
+  onToolStateChange,
+}: WorldCanvasProps, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const addMenuRef = useRef<HTMLDivElement>(null);
-  const addMenuButtonRef = useRef<HTMLButtonElement>(null);
   const pixiRef = useRef<any>(null);
   const renderFlagsRef = useRef({ full: false, dragTarget: null as DragTarget | null });
   const renderRafRef = useRef<number | null>(null);
@@ -457,13 +523,20 @@ export function WorldCanvas({
     useSimulationStore();
 
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [editMode, setEditMode] = useState(true);
+  const [primaryTool, setPrimaryTool] = useState<"inspect" | "move">(
+    initialTool === "move" ? "move" : "inspect"
+  );
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [addMode, setAddMode] = useState<AddMode>("none");
   const [connectionSourceKey, setConnectionSourceKey] = useState<string | null>(null);
   const [linkType, setLinkType] = useState<BoardLinkType>("causal");
-  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [deleteMode, setDeleteMode] = useState(initialTool === "delete");
+  const [showViewControls, setShowViewControls] = useState(false);
+  const [showRelationships, setShowRelationships] = useState(true);
+  const [showFronts, setShowFronts] = useState(true);
+  const [showRegions, setShowRegions] = useState(true);
+  const [showRecentNodes, setShowRecentNodes] = useState(false);
 
   const hasCampaignGeometry =
     map.regions.length > 0 ||
@@ -477,6 +550,31 @@ export function WorldCanvas({
   const showFrontLabels = labelDensity !== "minimal";
   const showRegionMetrics = labelDensity === "dense";
   const showMinorLabels = labelDensity === "dense";
+
+  const majorLabelStyle = useMemo(() => new (pixi as any).TextStyle({
+    fill: 0xf5f5f5,
+    fontFamily: "Manrope, system-ui, sans-serif",
+    fontSize: labelDensity === "dense" ? 17 : 15,
+    fontWeight: "700",
+    stroke: { color: 0x000000, width: 5, join: "round" },
+  }), [labelDensity]);
+
+  const minorLabelStyle = useMemo(() => new (pixi as any).TextStyle({
+    fill: 0xb4b7bd,
+    fontFamily: "Manrope, system-ui, sans-serif",
+    fontSize: 11,
+    fontWeight: "600",
+    stroke: { color: 0x000000, width: 4, join: "round" },
+    letterSpacing: 0.4,
+  }), []);
+
+  const tinyLabelStyle = useMemo(() => new (pixi as any).TextStyle({
+    fill: 0x8a8f98,
+    fontFamily: "JetBrains Mono, monospace",
+    fontSize: 9,
+    letterSpacing: 0.8,
+  }), []);
+
   const frontAlpha =
     workspaceSettings.map.frontOverlayIntensity === "low"
       ? 0.25
@@ -527,6 +625,14 @@ export function WorldCanvas({
         selectedEntity.type === "front")
   );
   const canDeleteSelection = Boolean(selectedManualNode || selectedBoardLink);
+  const activeTool: BoardTool =
+    addMode !== "none"
+      ? addMode
+      : connectionSourceKey
+        ? "connect"
+        : deleteMode
+          ? "delete"
+          : primaryTool;
   const modeDescriptor = useMemo(() => {
     if (addMode !== "none") {
       const tooltips: Record<Exclude<AddMode, "none">, string> = {
@@ -546,11 +652,43 @@ export function WorldCanvas({
         ? "Choose the first node to begin a board link."
         : "Choose the destination node to complete the link.";
     }
-    if (editMode) {
+    if (deleteMode) {
+      return "Click a manual node or board link to queue it for removal.";
+    }
+    if (primaryTool === "move") {
       return "Drag regions, sites, tokens, or agents directly on the board.";
     }
     return "Pan, inspect, and focus without moving map objects.";
-  }, [addMode, connectionSourceKey, editMode]);
+  }, [addMode, connectionSourceKey, deleteMode, primaryTool]);
+
+  useEffect(() => {
+    onToolStateChange?.({
+      activeTool,
+      linkType,
+      zoomPercent,
+      showGrid,
+      showRelationships,
+      showFronts,
+      showRegions,
+      snapToGrid,
+      labelDensity,
+      canDeleteSelection,
+      canStartLinkFromSelection,
+    });
+  }, [
+    activeTool,
+    canDeleteSelection,
+    canStartLinkFromSelection,
+    labelDensity,
+    linkType,
+    onToolStateChange,
+    showGrid,
+    showFronts,
+    showRegions,
+    showRelationships,
+    snapToGrid,
+    zoomPercent,
+  ]);
 
   const updateZoomHud = useCallback(() => {
     const viewport = pixiRef.current?.viewport;
@@ -637,13 +775,31 @@ export function WorldCanvas({
       return;
     }
     setAddMode("none");
-    setShowAddMenu(false);
+    setDeleteMode(false);
     setConnectionSourceKey(encodeSelectionKey(selectedEntity as ConnectableSelection));
   }, [canStartLinkFromSelection, selectedEntity]);
 
   const resetCamera = useCallback(() => {
     animateCamera({ centerX: 0, centerY: 0, scale: 1 });
   }, [animateCamera]);
+
+  const setBoardTool = useCallback((tool: BoardTool) => {
+    setAddMode(tool === "connect" || tool === "delete" || tool === "inspect" || tool === "move" ? "none" : tool);
+    setConnectionSourceKey(tool === "connect" ? "__armed__" : null);
+    setDeleteMode(tool === "delete");
+    if (tool === "inspect" || tool === "move") {
+      setPrimaryTool(tool);
+    }
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    focusSelection,
+    beginLinkFromSelection,
+    clearSelection: () => onSelectEntity(null),
+    fitToContent,
+    resetCamera,
+    setBoardTool,
+  }), [beginLinkFromSelection, fitToContent, focusSelection, onSelectEntity, resetCamera, setBoardTool]);
 
   function renderScene({
     refs,
@@ -653,6 +809,7 @@ export function WorldCanvas({
     onSelectConnectionTarget,
     setDragTarget,
     editMode,
+    deleteMode,
     addMode,
     labelDensity,
     showRouteLabels,
@@ -661,6 +818,9 @@ export function WorldCanvas({
     showMinorLabels,
     frontAlpha,
     showGrid,
+    showRelationships,
+    showFronts,
+    showRegions,
     showProjections,
     projectionAgents,
     connectionSourceKey,
@@ -674,6 +834,7 @@ export function WorldCanvas({
     onSelectConnectionTarget: (selection: ConnectableSelection) => Promise<void>;
     setDragTarget: (target: DragTarget, startWorld: Position) => void;
     editMode: boolean;
+    deleteMode: boolean;
     addMode: AddMode;
     labelDensity: "minimal" | "balanced" | "dense";
     showRouteLabels: boolean;
@@ -682,6 +843,9 @@ export function WorldCanvas({
     showMinorLabels: boolean;
     frontAlpha: number;
     showGrid: boolean;
+    showRelationships: boolean;
+    showFronts: boolean;
+    showRegions: boolean;
     showProjections: boolean;
     projectionAgents: Array<{ id: string; position: Position }>;
     connectionSourceKey: string | null;
@@ -705,30 +869,6 @@ export function WorldCanvas({
     clearDisplayLayer(refs.layers.ghosts);
     clearDisplayLayer(refs.layers.agents);
     clearDisplayLayer(refs.layers.manualNodes);
-
-    const majorLabelStyle = new TextStyle({
-      fill: 0xf5f5f5,
-      fontFamily: "Manrope, system-ui, sans-serif",
-      fontSize: labelDensity === "dense" ? 17 : 15,
-      fontWeight: "700",
-      stroke: { color: 0x000000, width: 5, join: "round" },
-    });
-
-    const minorLabelStyle = new TextStyle({
-      fill: 0xb4b7bd,
-      fontFamily: "Manrope, system-ui, sans-serif",
-      fontSize: 11,
-      fontWeight: "600",
-      stroke: { color: 0x000000, width: 4, join: "round" },
-      letterSpacing: 0.4,
-    });
-
-    const tinyLabelStyle = new TextStyle({
-      fill: 0x8a8f98,
-      fontFamily: "JetBrains Mono, monospace",
-      fontSize: 9,
-      letterSpacing: 0.8,
-    });
 
     interface NodeCardOptions {
       container: any;
@@ -822,7 +962,8 @@ export function WorldCanvas({
       onSelectEntity,
       onSelectConnectionTarget,
       setDragTarget,
-      editMode,
+      editMode: primaryTool === "move" && !deleteMode,
+      deleteMode,
       addMode,
       labelDensity,
       showRegionLabels,
@@ -830,6 +971,9 @@ export function WorldCanvas({
       showTokenLabels,
       frontAlpha,
       showGrid,
+      showRelationships,
+      showFronts,
+      showRegions,
       showProjections,
       projectionAgents,
       connectionSourceKey,
@@ -843,7 +987,9 @@ export function WorldCanvas({
 
     renderGridLayer(renderLayerOptions);
     renderInfrastructureLayer(renderLayerOptions);
-    renderRelationshipsLayer(renderLayerOptions);
+    if (showRelationships) {
+      renderRelationshipsLayer(renderLayerOptions);
+    }
     renderGeographyLayer(renderLayerOptions);
     renderEntitiesLayer(renderLayerOptions);
   }
@@ -879,7 +1025,7 @@ export function WorldCanvas({
 
   function renderInfrastructureLayer(opts: RenderLayerOptions) {
     const { Graphics, Text, Container } = pixi;
-    const { scene, refs, selectedEntity, onSelectEntity, onSelectConnectionTarget, connectionSourceKey, showRouteText, tinyLabelStyle, frontAlpha, drawNodeCard } = opts;
+    const { scene, refs, selectedEntity, onSelectEntity, onSelectConnectionTarget, connectionSourceKey, showRouteText, tinyLabelStyle, frontAlpha, drawNodeCard, showFronts } = opts;
 
     for (const route of scene.map.routes) {
       const from = scene.map.sites.find((site) => site.id === route.fromSiteId);
@@ -896,7 +1042,15 @@ export function WorldCanvas({
       line.stroke({ width: isSelected ? 3.5 : 2.2, color: color, alpha: 0.65, join: "round" });
       line.eventMode = "static";
       line.cursor = "pointer";
-      line.on("pointertap", (event: any) => { event.stopPropagation(); onSelectEntity({ type: "route", id: route.id }); });
+      line.on("pointertap", (event: any) => {
+        event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "route", id: route.id });
+          setDeleteMode(false);
+          return;
+        }
+        onSelectEntity({ type: "route", id: route.id });
+      });
       refs.layers.routes.addChild(line);
       if (showRouteText) {
         const label = new Text({ text: route.name, style: tinyLabelStyle });
@@ -907,6 +1061,7 @@ export function WorldCanvas({
       }
     }
 
+    if (!showFronts) return;
     for (const front of scene.fronts) {
       const frontIndex = scene.fronts.findIndex((entry) => entry.id === front.id);
       const region = scene.map.regions.find((candidate) => candidate.id === front.regionId);
@@ -920,6 +1075,11 @@ export function WorldCanvas({
       ring.cursor = "pointer";
       ring.on("pointertap", (event: any) => {
         event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "front", id: front.id });
+          setDeleteMode(false);
+          return;
+        }
         if (connectionSourceKey) { void onSelectConnectionTarget({ type: "front", id: front.id }); return; }
         onSelectEntity({ type: "front", id: front.id });
       });
@@ -931,14 +1091,22 @@ export function WorldCanvas({
       container.eventMode = "static";
       container.cursor = "pointer";
       drawNodeCard({ container, width: 150, height: 44, color: frontStroke(front), title: front.name, subtitle: front.pressure > 0.6 ? "Volatile Front" : "Stable Front", isSelected, statusColor: frontStroke(front) });
-      container.on("pointertap", (event: any) => { event.stopPropagation(); onSelectEntity({ type: "front", id: front.id }); });
+      container.on("pointertap", (event: any) => {
+        event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "front", id: front.id });
+          setDeleteMode(false);
+          return;
+        }
+        onSelectEntity({ type: "front", id: front.id });
+      });
       refs.layers.fronts.addChild(container);
     }
   }
 
   function renderRelationshipsLayer(opts: RenderLayerOptions) {
     const { Graphics, Text } = pixi;
-    const { scene, refs, selectedEntity, onSelectEntity, zoomScale, tinyLabelStyle } = opts;
+    const { scene, refs, selectedEntity, onSelectEntity, zoomScale, tinyLabelStyle, deleteMode } = opts;
 
     for (const relationship of scene.relationships) {
       const source = scene.agents.find((agent) => agent.id === relationship.sourceAgentId);
@@ -970,7 +1138,15 @@ export function WorldCanvas({
       line.stroke({ width: isSelected ? 3.8 : 2.5, color: strokeColor, alpha: isSelected ? 1 : 0.55, join: "round" });
       line.eventMode = "static";
       line.cursor = "pointer";
-      line.on("pointertap", (event: any) => { event.stopPropagation(); onSelectEntity({ type: "boardLink", id: link.id }); });
+      line.on("pointertap", (event: any) => {
+        event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "boardLink", id: link.id });
+          setDeleteMode(false);
+          return;
+        }
+        onSelectEntity({ type: "boardLink", id: link.id });
+      });
       refs.layers.relationships.addChild(line);
       if (zoomScale > 0.78) {
         const midX = (source.x + target.x) / 2;
@@ -986,9 +1162,10 @@ export function WorldCanvas({
 
   function renderGeographyLayer(opts: RenderLayerOptions) {
     const { Container, Graphics, Text } = pixi;
-    const { scene, refs, editMode, addMode, connectionSourceKey, setDragTarget, onSelectConnectionTarget, onSelectEntity, showRegionLabels, majorLabelStyle, updateOnlyDragTarget } = opts;
+    const { scene, refs, editMode, deleteMode, addMode, connectionSourceKey, setDragTarget, onSelectConnectionTarget, onSelectEntity, showRegionLabels, majorLabelStyle, updateOnlyDragTarget, showRegions } = opts;
 
     if (updateOnlyDragTarget && updateOnlyDragTarget.kind !== "region-radius") return;
+    if (!showRegions) return;
     for (const region of scene.map.regions) {
       const container = new Container();
       container.label = `region_${region.id}`;
@@ -1015,6 +1192,11 @@ export function WorldCanvas({
       });
       container.on("pointertap", (event: any) => {
         event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "region", id: region.id });
+          setDeleteMode(false);
+          return;
+        }
         if (connectionSourceKey) { void onSelectConnectionTarget({ type: "region", id: region.id }); return; }
         onSelectEntity({ type: "region", id: region.id });
       });
@@ -1049,6 +1231,12 @@ export function WorldCanvas({
       const factionColor = getFactionColor(site.controllingFactionId);
       opts.drawNodeCard({ container, width: 120, height: 38, color: factionColor, title: site.name, subtitle: "Operational Site", isSelected, statusColor: factionColor });
       container.on("pointerdown", (event: any) => {
+        if (deleteMode) {
+          event.stopPropagation();
+          onRequestDeleteSelection({ type: "site", id: site.id });
+          setDeleteMode(false);
+          return;
+        }
         if (connectionSourceKey) { event.stopPropagation(); void onSelectConnectionTarget({ type: "site", id: site.id }); return; }
         onSelectEntity({ type: "site", id: site.id });
         if (!editMode || addMode !== "none") return;
@@ -1064,7 +1252,7 @@ export function WorldCanvas({
 
   function renderEntitiesLayer(opts: RenderLayerOptions) {
     const { Container, Graphics, Text } = pixi;
-    const { scene, refs, editMode, addMode, connectionSourceKey, setDragTarget, onSelectConnectionTarget, onSelectEntity, selectedEntity, showTokenLabels, minorLabelStyle, showProjections, projectionAgents, drawNodeCard } = opts;
+    const { scene, refs, editMode, deleteMode, addMode, connectionSourceKey, setDragTarget, onSelectConnectionTarget, onSelectEntity, selectedEntity, showTokenLabels, minorLabelStyle, showProjections, projectionAgents, drawNodeCard } = opts;
 
     for (const node of scene.campaignNodes) {
       const container = new Container();
@@ -1078,6 +1266,11 @@ export function WorldCanvas({
       drawNodeCard({ container, width: 140, height: 44, color: nodeColor, title: node.name, subtitle: `${kindLabel} Entity`, isSelected, statusColor: nodeColor });
       container.on("pointertap", (event: any) => {
         event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "campaignNode", id: node.id });
+          setDeleteMode(false);
+          return;
+        }
         if (connectionSourceKey) { void onSelectConnectionTarget({ type: "campaignNode", id: node.id }); return; }
         onSelectEntity({ type: "campaignNode", id: node.id });
       });
@@ -1150,6 +1343,11 @@ export function WorldCanvas({
       drawNodeCard({ container, width: 130, height: 42, color: factionColor, title: agent.name, subtitle: agent.status === "alive" ? "Active Operative" : "Terminated", isSelected, statusColor });
       container.on("pointertap", (event: any) => {
         event.stopPropagation();
+        if (deleteMode) {
+          onRequestDeleteSelection({ type: "agent", id: agent.id });
+          setDeleteMode(false);
+          return;
+        }
         if (connectionSourceKey) { void onSelectConnectionTarget({ type: "agent", id: agent.id }); return; }
         onSelectEntity({ type: "agent", id: agent.id });
       });
@@ -1230,7 +1428,8 @@ export function WorldCanvas({
         setDragTarget: (target: DragTarget, startWorld: Position) => {
           dragRef.current = { target, startWorld, moved: false };
         },
-        editMode,
+        editMode: primaryTool === "move" && !deleteMode,
+        deleteMode,
         addMode,
         labelDensity,
         showRouteLabels,
@@ -1239,6 +1438,9 @@ export function WorldCanvas({
         showMinorLabels,
         frontAlpha,
         showGrid,
+        showRelationships,
+        showFronts,
+        showRegions,
         showProjections,
         projectionAgents,
         connectionSourceKey,
@@ -1249,7 +1451,7 @@ export function WorldCanvas({
   }, [
     addMode,
     connectionSourceKey,
-    editMode,
+    deleteMode,
     frontAlpha,
     labelDensity,
     linkType,
@@ -1258,8 +1460,12 @@ export function WorldCanvas({
     onSelectEntity,
     projectionAgents,
     selectedEntity,
+    primaryTool,
+    showFronts,
     showFrontLabels,
     showGrid,
+    showRelationships,
+    showRegions,
     showMinorLabels,
     showProjections,
     showRegionMetrics,
@@ -1268,7 +1474,8 @@ export function WorldCanvas({
 
   const liveContext = useRef({
     addMode,
-    editMode,
+    primaryTool,
+    deleteMode,
     snapToGrid,
     onMoveAgent,
     onMoveCampaignNode,
@@ -1286,7 +1493,8 @@ export function WorldCanvas({
   });
   liveContext.current = {
     addMode,
-    editMode,
+    primaryTool,
+    deleteMode,
     snapToGrid,
     onMoveAgent,
     onMoveCampaignNode,
@@ -1368,7 +1576,7 @@ export function WorldCanvas({
           y: (pt.y - viewport.position.y) / viewport.scale.y
         };
       };
-      viewport.plugins = { resume: () => {} };
+      viewport.plugins = { pause: () => {}, resume: () => {} };
 
       app.stage.addChild(viewport);
 
@@ -1400,10 +1608,16 @@ export function WorldCanvas({
 
       const handlePointerDown = (event: any) => {
         // Only pan on middle-click, or if the user clicks empty space in 'view' mode (handled by click events)
-        if (event.button === 1 || event.button === 2 || (liveContext.current.editMode && liveContext.current.addMode === "none")) {
+        if (
+          event.button === 1 ||
+          event.button === 2 ||
+          (liveContext.current.primaryTool === "move" &&
+            !liveContext.current.deleteMode &&
+            liveContext.current.addMode === "none")
+        ) {
            isPanning = true;
            lastPanPos = { x: event.global.x, y: event.global.y };
-        }
+         }
       };
 
       const handlePointerMove = (event: any) => {
@@ -1456,6 +1670,7 @@ export function WorldCanvas({
             radius: 140,
           });
           setAddMode("none");
+          setPrimaryTool("inspect");
           return;
         }
         if (liveContext.current.addMode === "site") {
@@ -1467,6 +1682,7 @@ export function WorldCanvas({
             regionId: findNearestRegion(sceneRef.current.map, world)?.id ?? null,
           });
           setAddMode("none");
+          setPrimaryTool("inspect");
           return;
         }
         if (liveContext.current.addMode === "token") {
@@ -1480,6 +1696,7 @@ export function WorldCanvas({
             siteId: nearestSite?.id ?? null,
           });
           setAddMode("none");
+          setPrimaryTool("inspect");
           return;
         }
         if (
@@ -1500,6 +1717,7 @@ export function WorldCanvas({
             siteId: findNearestSite(sceneRef.current.map, world)?.id ?? null,
           });
           setAddMode("none");
+          setPrimaryTool("inspect");
           return;
         }
         liveContext.current.onSelectEntity(null);
@@ -1594,53 +1812,54 @@ export function WorldCanvas({
     }
   }, [fitToContent, isEmptyState]);
 
-  useEffect(() => {
-    if (!showAddMenu) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        (addMenuRef.current && addMenuRef.current.contains(target)) ||
-        (addMenuButtonRef.current && addMenuButtonRef.current.contains(target))
-      ) {
-        return;
-      }
-      setShowAddMenu(false);
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [showAddMenu]);
-
-  const activeMode = addMode !== "none" ? addMode : connectionSourceKey ? "connect" : null;
+  const activeMode = addMode !== "none" ? addMode : connectionSourceKey ? "connect" : deleteMode ? "delete" : null;
   const canvasCursor = activeMode ? "crosshair" : "default";
-
+  const viewControls = [
+    { id: "grid", icon: Grid3x3, label: "Toggle grid", active: showGrid, onClick: () => setShowGrid((value) => !value) },
+    { id: "snap", icon: Magnet, label: "Toggle snap", active: snapToGrid, onClick: () => setSnapToGrid((value) => !value) },
+    {
+      id: "labels",
+      icon: Tag,
+      label: `Cycle labels (${labelDensity})`,
+      active: labelDensity !== "minimal",
+      onClick: () => {
+        const next =
+          workspaceSettings.map.labelDensity === "minimal"
+            ? "balanced"
+            : workspaceSettings.map.labelDensity === "balanced"
+              ? "dense"
+              : "minimal";
+        setWorkspaceSettings({ map: { ...workspaceSettings.map, labelDensity: next } });
+      },
+    },
+    { id: "regions", icon: showRegions ? Hexagon : EyeOff, label: "Toggle regions", active: showRegions, onClick: () => setShowRegions((value) => !value) },
+    { id: "fronts", icon: showFronts ? FlagTriangleRight : EyeOff, label: "Toggle fronts", active: showFronts, onClick: () => setShowFronts((value) => !value) },
+    { id: "links", icon: showRelationships ? Link2 : EyeOff, label: "Toggle links", active: showRelationships, onClick: () => setShowRelationships((value) => !value) },
+  ] as const;
   // --- Keyboard Shortcuts ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
       switch (e.key.toLowerCase()) {
-        case "r": setAddMode(m => m === "region" ? "none" : "region"); setConnectionSourceKey(null); break;
-        case "s": setAddMode(m => m === "site" ? "none" : "site"); setConnectionSourceKey(null); break;
-        case "t": setAddMode(m => m === "token" ? "none" : "token"); setConnectionSourceKey(null); break;
-        case "c": setConnectionSourceKey(c => c ? null : "__armed__"); setAddMode("none"); break;
+        case "v": setBoardTool("inspect"); break;
+        case "m": setBoardTool("move"); break;
+        case "r": setBoardTool("region"); break;
+        case "s": setBoardTool("site"); break;
+        case "t": setBoardTool("token"); break;
+        case "a": setBoardTool("agent"); break;
+        case "c": setBoardTool("connect"); break;
+        case "d": setBoardTool("delete"); break;
         case "g": setShowGrid(v => !v); break;
         case "n": setSnapToGrid(v => !v); break;
         case "f": fitToContent(); break;
         case "0": resetCamera(); break;
-        case "escape": setAddMode("none"); setConnectionSourceKey(null); setShowAddMenu(false); break;
+        case "escape": setBoardTool("inspect"); break;
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [fitToContent, resetCamera]);
-
-  const tbtn = (active: boolean) =>
-    `flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium tracking-wide transition-all duration-150 ${
-      active
-        ? "bg-[rgba(45,212,191,0.14)] text-white shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
-        : "text-(--text-secondary) hover:text-(--text-primary) hover:bg-[rgba(45,212,191,0.08)]"
-    }`;
-  const tsep = "mx-0.5 w-px self-stretch bg-[rgba(45,212,191,0.08)]";
+  }, [fitToContent, resetCamera, setBoardTool]);
 
   return (
     <div 
@@ -1653,262 +1872,122 @@ export function WorldCanvas({
       {/* ── Grid Layer Host (PixiJS) ── */}
       <div ref={hostRef} className="absolute inset-0 touch-none select-none z-10" />
 
-      <div className="absolute left-4 top-4 z-10 max-w-88 rounded-xl border border-[rgba(45,212,191,0.15)] bg-[rgba(6,16,23,0.9)] px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.48)] backdrop-blur-xl">
-        <div className="flex items-center gap-2">
-          <div className="h-2 w-2 rounded-full bg-[rgba(103,232,249,0.85)]" />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[rgba(103,232,249,0.72)]">
-            Campaign Board
-          </p>
+      <Tooltip.Provider delayDuration={120}>
+      <div className="absolute inset-0 z-20 pointer-events-none">
+        <div className="pointer-events-auto">
+        <div className="absolute left-4 top-4 z-10">
+          <div className="w-16 rounded-[18px] border border-white/8 bg-[rgba(7,11,14,0.94)] p-2 shadow-[0_8px_20px_rgba(0,0,0,0.22)] backdrop-blur-sm">
+            <CanvasToolGroup>
+              {INTERACTION_TOOL_CONFIG.map(({ tool, label, shortcut, destructive }) => (
+                <CanvasIconButton
+                  key={tool}
+                  icon={TOOL_ICON_MAP[tool]}
+                  label={tool === "connect" ? `${label} (${linkType})` : label}
+                  shortcut={shortcut || undefined}
+                  active={activeTool === tool}
+                  destructive={destructive}
+                  onClick={() => setBoardTool(tool)}
+                />
+              ))}
+            </CanvasToolGroup>
+
+            <CanvasToolGroup className="mt-3 border-t border-white/6 pt-3">
+              {CREATION_TOOL_CONFIG.map(({ tool, label, shortcut }) => (
+                <CanvasIconButton
+                  key={tool}
+                  icon={TOOL_ICON_MAP[tool]}
+                  label={label}
+                  shortcut={shortcut || undefined}
+                  active={activeTool === tool}
+                  onClick={() => setBoardTool(tool)}
+                />
+              ))}
+            </CanvasToolGroup>
+
+            <CanvasToolGroup className="mt-3 border-t border-white/6 pt-3">
+              <CanvasIconButton
+                icon={Eye}
+                label={showViewControls ? "Hide view controls" : "Show view controls"}
+                active={showViewControls}
+                onClick={() => setShowViewControls((value) => !value)}
+              />
+              {showViewControls ? (
+                <div className="mt-2 flex flex-col gap-2">
+                  {viewControls.map((control) => (
+                    <CanvasIconButton
+                      key={control.id}
+                      icon={control.icon}
+                      label={control.label}
+                      active={control.active}
+                      subtle
+                      onClick={control.onClick}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </CanvasToolGroup>
+          </div>
         </div>
-        <p className="mt-2 text-sm font-semibold tracking-[-0.02em] text-white">
-          {activeMode
-            ? activeMode === "connect"
-              ? "Route Linking"
-              : `Add ${activeMode.charAt(0).toUpperCase()}${activeMode.slice(1)}`
-            : editMode
-              ? "Direct Editing"
-              : "Inspection Mode"}
-        </p>
-        <p className="mt-1 text-xs leading-5 text-white/48">{modeDescriptor}</p>
-      </div>
 
       {/* ── Floating Toolbar ── */}
-      <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 flex items-center gap-1 rounded-xl border border-[rgba(45,212,191,0.12)] bg-[rgba(5,14,21,0.9)] px-2 py-1.5 backdrop-blur-xl shadow-[0_12px_32px_rgba(0,0,0,0.5)]">
-        {/* Mode Toggle */}
-        <button type="button" onClick={() => setEditMode(v => !v)} className={tbtn(editMode)} title={editMode ? "Edit mode (drag nodes)" : "View mode"}>
-          {editMode ? <Mouse className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          <span className="hidden sm:inline">{editMode ? "Edit Board" : "Inspect"}</span>
-        </button>
+      <CanvasStatusStrip
+        icon={activeTool === "delete" ? Trash2 : activeTool === "connect" ? Workflow : activeTool === "move" ? Hand : TOOL_ICON_MAP[activeTool]}
+        label={modeDescriptor}
+      />
 
-        <div className={tsep} />
-
-        {/* Display Controls */}
-        <button type="button" onClick={() => {
-          const next = workspaceSettings.map.labelDensity === "minimal" ? "balanced" : workspaceSettings.map.labelDensity === "balanced" ? "dense" : "minimal";
-          setWorkspaceSettings({ map: { ...workspaceSettings.map, labelDensity: next } });
-        }} className={tbtn(labelDensity !== "minimal")} title="Label density">
-          <Tag className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" onClick={() => setShowGrid(v => !v)} className={tbtn(showGrid)} title="Toggle grid (G)">
-          <Grid3x3 className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" onClick={() => setSnapToGrid(v => !v)} className={tbtn(snapToGrid)} title="Snap to grid (N)">
-          <Magnet className="h-3.5 w-3.5" />
-        </button>
-
-        <div className={tsep} />
-
-        <div className="relative">
-          <button
-            type="button"
-            ref={addMenuButtonRef}
-            onClick={() => setShowAddMenu((value) => !value)}
-            className={tbtn(addMode !== "none")}
-            title="Add nodes to the campaign board"
-          >
-            <CircleDot className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Add</span>
-            <ChevronDown className="h-3 w-3 opacity-70" />
+      <div className="absolute right-4 top-4 z-10 w-40 rounded-[16px] border border-white/8 bg-[rgba(7,11,14,0.94)] p-3 shadow-[0_8px_20px_rgba(0,0,0,0.22)] backdrop-blur-sm">
+        <div className="flex items-center justify-between rounded-[12px] border border-white/7 bg-white/[0.03] px-3 py-2">
+          <button type="button" onClick={() => pixiRef.current?.viewport?.setZoom((pixiRef.current?.viewport?.scale?.x ?? 1) * 0.9, true)} className="text-white/70 transition hover:text-white" aria-label="Zoom out">
+            <Minus className="h-3.5 w-3.5" />
           </button>
-          {showAddMenu ? (
-            <div ref={addMenuRef} className="absolute left-0 top-[calc(100%+10px)] z-20 w-[18rem] rounded-xl border border-white/8 bg-black/94 p-3 shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-              <div className="grid gap-3">
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">Actors & Forces</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      ["agent", "Actor"],
-                      ["faction", "Faction"],
-                      ["front", "Front"],
-                    ].map(([kind, label]) => (
-                      <button
-                        key={kind}
-                        type="button"
-                        onClick={() => {
-                          setAddMode(kind as AddMode);
-                          setConnectionSourceKey(null);
-                          setShowAddMenu(false);
-                        }}
-                        className={`rounded-lg border px-3 py-2 text-left text-xs font-medium transition ${
-                          addMode === kind
-                            ? "border-white/16 bg-white/8 text-white"
-                            : "border-white/6 bg-white/3 text-white/76 hover:bg-white/6"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">Geography</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      ["place", "Place"],
-                      ["region", "Region"],
-                      ["site", "Site"],
-                    ].map(([kind, label]) => (
-                      <button
-                        key={kind}
-                        type="button"
-                        onClick={() => {
-                          setAddMode(kind as AddMode);
-                          setConnectionSourceKey(null);
-                          setShowAddMenu(false);
-                        }}
-                        className={`rounded-lg border px-3 py-2 text-left text-xs font-medium transition ${
-                          addMode === kind
-                            ? "border-white/16 bg-white/8 text-white"
-                            : "border-white/6 bg-white/3 text-white/76 hover:bg-white/6"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">Play State</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      ["token", "Token"],
-                      ["event", "Event"],
-                    ].map(([kind, label]) => (
-                      <button
-                        key={kind}
-                        type="button"
-                        onClick={() => {
-                          setAddMode(kind as AddMode);
-                          setConnectionSourceKey(null);
-                          setShowAddMenu(false);
-                        }}
-                        className={`rounded-lg border px-3 py-2 text-left text-xs font-medium transition ${
-                          addMode === kind
-                            ? "border-white/16 bg-white/8 text-white"
-                            : "border-white/6 bg-white/3 text-white/76 hover:bg-white/6"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          <span className="text-xs font-medium tabular-nums text-white/76">{zoomPercent}%</span>
+          <button type="button" onClick={() => pixiRef.current?.viewport?.setZoom((pixiRef.current?.viewport?.scale?.x ?? 1) * 1.1, true)} className="text-white/70 transition hover:text-white" aria-label="Zoom in">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         </div>
-        <button type="button" onClick={() => { setConnectionSourceKey(c => c ? null : "__armed__"); setAddMode("none"); setShowAddMenu(false); }} className={tbtn(!!connectionSourceKey)} title="Link nodes on the board (C)">
-          <Link2 className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Link Nodes</span>
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            setLinkType((current) =>
-              current === "causal"
-                ? "alliance"
-                : current === "alliance"
-                  ? "conflict"
-                  : current === "conflict"
-                    ? "dependency"
-                    : current === "dependency"
-                      ? "route"
-                      : "causal"
-            )
-          }
-          className={tbtn(connectionSourceKey !== null)}
-          title="Cycle link type"
-        >
-          <span className="hidden sm:inline">Type</span>
-          <span className="font-mono text-[10px] uppercase text-white/70">{linkType}</span>
-        </button>
-
-        <div className={tsep} />
-
-        {/* Camera Controls */}
-        <button type="button" onClick={fitToContent} className={tbtn(false)} title="Fit to content (F)">
-          <ScanSearch className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" onClick={resetCamera} className={tbtn(false)} title="Reset camera (0)">
-          <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        <div className="mt-2 flex gap-2">
+          <CanvasIconButton icon={ScanSearch} label="Fit to content" shortcut="F" subtle onClick={fitToContent} />
+          <CanvasIconButton icon={RotateCcw} label="Reset camera" shortcut="0" subtle onClick={resetCamera} />
+        </div>
       </div>
+        </div>
+      </div>
+      </Tooltip.Provider>
 
-      {activeMode ? (
-        <div className="absolute left-1/2 top-16 z-10 -translate-x-1/2 flex items-center gap-2 rounded-full border border-[rgba(245,158,11,0.22)] bg-[rgba(245,158,11,0.1)] px-4 py-1.5 text-xs font-medium text-[rgba(255,236,179,0.92)] backdrop-blur-sm animate-in fade-in slide-in-from-top-2 duration-200">
+      {activeMode && activeTool !== "delete" ? (
+        <div className="absolute left-1/2 top-18 z-10 -translate-x-1/2 flex items-center gap-2 rounded-full border border-white/8 bg-[rgba(15,23,31,0.84)] px-4 py-1.5 text-xs font-medium text-white/86 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-200">
           <Crosshair className="h-3.5 w-3.5" />
           {activeMode === "connect"
             ? connectionSourceKey && connectionSourceKey !== "__armed__"
               ? `Choose destination for ${linkType} link`
               : "Choose the first node to start linking"
             : `Click canvas to place ${activeMode}`}
-          <kbd className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-white/50">ESC</kbd>
-        </div>
-      ) : null}
-
-      {selectedEntity ? (
-        <div className="absolute bottom-4 left-4 z-10 max-w-sm rounded-2xl border border-[rgba(45,212,191,0.18)] bg-[rgba(5,16,24,0.9)] px-4 py-3 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[rgba(103,232,249,0.7)]">
-                Selected
-              </div>
-              <div className="mt-1 text-sm font-semibold text-white">
-                {selectedBoardLabel ?? `${selectedEntity.type} ${selectedEntity.id}`}
-              </div>
-            </div>
-            <span className="rounded-full border border-[rgba(45,212,191,0.18)] bg-[rgba(45,212,191,0.08)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[rgba(153,246,228,0.86)]">
-              {selectedEntity.type}
-            </span>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={focusSelection}
-              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white/78 transition hover:bg-white/10 hover:text-white"
-            >
-              <LocateFixed className="h-3.5 w-3.5 text-[rgba(103,232,249,0.9)]" />
-              Focus
-            </button>
-            {canStartLinkFromSelection ? (
-              <button
-                type="button"
-                onClick={beginLinkFromSelection}
-                className="flex items-center gap-1.5 rounded-lg border border-[rgba(45,212,191,0.18)] bg-[rgba(45,212,191,0.1)] px-3 py-2 text-xs font-medium text-[rgba(153,246,228,0.92)] transition hover:bg-[rgba(45,212,191,0.16)]"
-              >
-                <Link2 className="h-3.5 w-3.5" />
-                Link From Here
-              </button>
-            ) : null}
-            {canDeleteSelection ? (
-              <button
-                type="button"
-                onClick={() => onRequestDeleteSelection(selectedEntity)}
-                className="flex items-center gap-1.5 rounded-lg border border-[rgba(251,113,133,0.22)] bg-[rgba(251,113,133,0.1)] px-3 py-2 text-xs font-medium text-[rgba(255,190,198,0.95)] transition hover:bg-[rgba(251,113,133,0.16)]"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Delete
-              </button>
-            ) : null}
-          </div>
+          <kbd className="ml-2 rounded bg-white/8 px-1.5 py-0.5 text-[10px] font-mono text-white/42">ESC</kbd>
         </div>
       ) : null}
 
       {recentManualNodes.length > 0 ? (
-        <div className="absolute bottom-4 right-4 z-10 w-72 rounded-2xl border border-[rgba(45,212,191,0.14)] bg-[rgba(4,14,21,0.9)] px-4 py-3 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+        <div className="absolute bottom-4 right-4 z-10">
+          <button
+            type="button"
+            onClick={() => setShowRecentNodes((value) => !value)}
+            className="mb-2 ml-auto flex h-9 w-9 items-center justify-center rounded-[12px] border border-white/8 bg-[rgba(7,11,14,0.92)] text-white/72 shadow-[0_8px_20px_rgba(0,0,0,0.22)] backdrop-blur-sm transition hover:border-white/12 hover:text-white"
+            aria-label="Toggle recent nodes"
+            title="Recent nodes"
+          >
+            <LocateFixed className="h-4 w-4" />
+          </button>
+          {showRecentNodes ? (
+        <div className="w-72 rounded-2xl border border-white/7 bg-[rgba(7,12,16,0.88)] px-4 py-3 shadow-[0_10px_22px_rgba(0,0,0,0.22)] backdrop-blur-md">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[rgba(103,232,249,0.68)]">
-                Recent Nodes
-              </div>
-              <div className="mt-1 text-sm font-semibold text-white">
-                Jump straight to newly placed entities
-              </div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/44">Recent Nodes</div>
+              <div className="mt-1 text-sm font-medium text-white/86">Jump to new entities</div>
             </div>
             <button
               type="button"
               onClick={fitToContent}
-              className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-white/75 transition hover:bg-white/10 hover:text-white"
+              className="rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-medium text-white/78 transition hover:bg-white/[0.08] hover:text-white"
             >
               Fit All
             </button>
@@ -1948,38 +2027,10 @@ export function WorldCanvas({
             })}
           </div>
         </div>
+          ) : null}
+        </div>
       ) : null}
 
-      <div className="absolute right-4 top-4 z-10 rounded-xl border border-[rgba(45,212,191,0.12)] bg-[rgba(5,14,21,0.88)] px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[rgba(103,232,249,0.58)]">
-          Camera
-        </p>
-        <div className="mt-2 flex items-center gap-1 rounded-lg border border-white/6 bg-white/3 px-1.5 py-1">
-          <button type="button" onClick={() => {
-            const vp = pixiRef.current?.viewport;
-            if (vp) { vp.setZoom(Math.max(vp.scale.x * 0.8, 0.14), true); updateZoomHud(); }
-          }} className="flex h-6 w-6 items-center justify-center rounded text-(--text-muted) transition hover:text-white hover:bg-white/10" title="Zoom out">
-            <Minus className="h-3 w-3" />
-          </button>
-          <div className="min-w-12 text-center text-[11px] font-mono text-(--text-secondary) tabular-nums">
-            {zoomPercent}%
-          </div>
-          <button type="button" onClick={() => {
-            const vp = pixiRef.current?.viewport;
-            if (vp) { vp.setZoom(Math.min(vp.scale.x * 1.25, 3.8), true); updateZoomHud(); }
-          }} className="flex h-6 w-6 items-center justify-center rounded text-(--text-muted) transition hover:text-white hover:bg-white/10" title="Zoom in">
-            <Plus className="h-3 w-3" />
-          </button>
-        </div>
-        <div className="mt-2 flex items-center gap-1">
-          <button type="button" onClick={fitToContent} className="rounded-md border border-[rgba(45,212,191,0.12)] bg-[rgba(45,212,191,0.08)] px-2 py-1 text-[10px] font-medium text-[rgba(153,246,228,0.9)] transition hover:bg-[rgba(45,212,191,0.14)]">
-            Fit
-          </button>
-          <button type="button" onClick={resetCamera} className="rounded-md border border-[rgba(45,212,191,0.12)] bg-[rgba(45,212,191,0.08)] px-2 py-1 text-[10px] font-medium text-[rgba(153,246,228,0.9)] transition hover:bg-[rgba(45,212,191,0.14)]">
-            Reset
-          </button>
-        </div>
-      </div>
 
       {/* ── Empty State ── */}
       {isEmptyState ? (
@@ -1995,13 +2046,13 @@ export function WorldCanvas({
               Open the Add menu to place actors, places, factions, fronts, and map geometry on the board.
             </p>
             <div className="mt-5 flex items-center justify-center gap-2">
-              <button type="button" onClick={() => setAddMode("region")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
+              <button type="button" onClick={() => setBoardTool("region")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
                 <Hexagon className="h-3.5 w-3.5 text-white/82" /> Region
               </button>
-              <button type="button" onClick={() => setAddMode("site")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
+              <button type="button" onClick={() => setBoardTool("site")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
                 <MapPin className="h-3.5 w-3.5 text-white/82" /> Site
               </button>
-              <button type="button" onClick={() => setAddMode("token")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
+              <button type="button" onClick={() => setBoardTool("token")} className="flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10">
                 <CircleDot className="h-3.5 w-3.5 text-white/82" /> Token
               </button>
             </div>
@@ -2012,5 +2063,85 @@ export function WorldCanvas({
         </div>
       ) : null}
     </div>
+  );
+});
+
+function CanvasToolGroup({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <div className={`flex flex-col gap-2 ${className}`.trim()}>{children}</div>;
+}
+
+function CanvasStatusStrip({
+  icon: Icon,
+  label,
+}: {
+  icon: typeof MousePointer2;
+  label: string;
+}) {
+  return (
+    <div className="absolute left-1/2 top-4 z-10 flex w-[min(30rem,calc(100%-24rem))] -translate-x-1/2 items-center gap-3 rounded-[14px] border border-white/8 bg-[rgba(7,11,14,0.94)] px-3 py-2 shadow-[0_8px_20px_rgba(0,0,0,0.22)] backdrop-blur-sm">
+      <span className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-white/8 bg-white/[0.04] text-white/86">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1 truncate text-sm font-medium text-white/88">{label}</div>
+      <kbd className="rounded-[8px] border border-white/8 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-white/38">Esc</kbd>
+    </div>
+  );
+}
+
+function CanvasIconButton({
+  icon: Icon,
+  label,
+  shortcut,
+  active = false,
+  destructive = false,
+  subtle = false,
+  onClick,
+}: {
+  icon: typeof MousePointer2;
+  label: string;
+  shortcut?: string;
+  active?: boolean;
+  destructive?: boolean;
+  subtle?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          className={`flex h-11 w-11 items-center justify-center rounded-[12px] border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(148,163,184,0.32)] ${
+            destructive
+              ? active
+                ? "border-[rgba(248,113,113,0.28)] bg-[rgba(127,29,29,0.34)] text-white"
+                : "border-white/8 bg-white/[0.02] text-white/68 hover:border-[rgba(248,113,113,0.22)] hover:bg-[rgba(127,29,29,0.18)] hover:text-white"
+              : active
+                ? "border-[rgba(148,163,184,0.26)] bg-[rgba(148,163,184,0.16)] text-white"
+                : subtle
+                  ? "border-white/7 bg-white/[0.03] text-white/64 hover:border-white/12 hover:bg-white/[0.06] hover:text-white"
+                  : "border-white/8 bg-white/[0.02] text-white/72 hover:border-white/12 hover:bg-white/[0.05] hover:text-white"
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          side="right"
+          sideOffset={10}
+          className="rounded-[10px] border border-white/10 bg-[rgba(7,11,14,0.96)] px-2.5 py-1.5 text-[11px] font-medium text-white shadow-[0_10px_24px_rgba(0,0,0,0.3)]"
+        >
+          {label}{shortcut ? ` (${shortcut})` : ""}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Compass, Link2, MapPin, Radar, Siren } from "lucide-react";
+import type { BoardTool, WorldCanvasUiState } from "@/components/workspace/world-canvas";
 import type { BoardSelection, CampaignNode, FrontClock, MapLayer, RelationshipEdge, SimEvent, WorldState } from "@/lib/sim/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,11 @@ interface ContextInspectorProps {
   readonly recentEvents: SimEvent[];
   readonly onDeleteCampaignNode?: (nodeId: string) => void | Promise<void>;
   readonly onDeleteBoardLink?: (linkId: string) => void | Promise<void>;
+  readonly boardUiState?: WorldCanvasUiState;
+  readonly onFocusSelection?: () => void;
+  readonly onBeginLinkFromSelection?: () => void;
+  readonly onClearSelection?: () => void;
+  readonly onSetBoardTool?: (tool: BoardTool) => void;
 }
 
 interface InspectorData {
@@ -37,6 +43,11 @@ export function ContextInspector({
   recentEvents,
   onDeleteCampaignNode,
   onDeleteBoardLink,
+  boardUiState,
+  onFocusSelection,
+  onBeginLinkFromSelection,
+  onClearSelection,
+  onSetBoardTool,
 }: ContextInspectorProps) {
   if (!selection || !worldState) {
     return (
@@ -65,6 +76,9 @@ export function ContextInspector({
         action={
           <div className="flex items-center gap-2">
             <Badge variant="default">{data.badge}</Badge>
+            <Button type="button" variant="ghost" size="sm" onClick={onFocusSelection}>
+              Focus
+            </Button>
             {selection.type === "campaignNode" ? (
               <Button
                 type="button"
@@ -90,6 +104,40 @@ export function ContextInspector({
       />
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-5 p-4">
+          <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge>{boardUiState?.activeTool ?? "inspect"}</Badge>
+              <Badge>{boardUiState?.zoomPercent ?? 100}% zoom</Badge>
+              {boardUiState?.showGrid ? <Badge>grid</Badge> : null}
+              {boardUiState?.snapToGrid ? <Badge>snap</Badge> : null}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={onFocusSelection}>
+                Focus Selection
+              </Button>
+              {boardUiState?.canStartLinkFromSelection ? (
+                <Button type="button" variant="secondary" size="sm" onClick={onBeginLinkFromSelection}>
+                  Link From Selection
+                </Button>
+              ) : null}
+              <Button type="button" variant="ghost" size="sm" onClick={onClearSelection}>
+                Clear
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onSetBoardTool?.("inspect")}>
+                Inspect Tool
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onSetBoardTool?.("move")}>
+                Move Tool
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onSetBoardTool?.("connect")}>
+                Link Tool
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onSetBoardTool?.("delete")}>
+                Delete Tool
+              </Button>
+            </div>
+          </section>
+
           <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
             <div className="text-xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{data.title}</div>
             <div className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{data.description}</div>
