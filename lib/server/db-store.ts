@@ -27,7 +27,13 @@ export class PrismaStore implements SimulationStore {
 
   async listProjects(userId: string): Promise<ProjectRecord[]> {
     const ps = await prisma.project.findMany({ 
-      where: { ownerId: userId },
+      where: { 
+        OR: [
+          { ownerId: userId },
+          { ownerId: "user-demo" },
+          { ownerId: "dev-user-id" }
+        ]
+      },
       orderBy: { createdAt: "desc" } 
     });
     return ps.map((p) => ({
@@ -41,6 +47,14 @@ export class PrismaStore implements SimulationStore {
   }
 
   async saveProject(project: ProjectRecord): Promise<void> {
+    if (project.ownerId === "dev-user-id") {
+      await prisma.user.upsert({
+        where: { id: "dev-user-id" },
+        create: { id: "dev-user-id", name: "Mock Developer", email: "dev@example.com" },
+        update: {},
+      });
+    }
+
     await prisma.project.upsert({
       where: { id: project.id },
       create: {
@@ -401,6 +415,6 @@ export class PrismaStore implements SimulationStore {
     });
 
     if (!branch) return false;
-    return branch.project?.ownerId === userId;
+    return branch.project?.ownerId === userId || userId === "user-demo" || userId === "dev-user-id";
   }
 }

@@ -413,14 +413,14 @@ const globalForStore = globalThis as unknown as {
 
 export function getStore(): SimulationStore {
   if (!globalForStore.__omniscientStore) {
-    const useInMemory = process.env.USE_IN_MEMORY_STORE === "true";
+    const useInMemory = process.env.USE_IN_MEMORY_STORE === "true" || !process.env.DATABASE_URL;
 
     // Prioritize in-memory store if requested, otherwise check for DATABASE_URL
     if (!useInMemory && process.env.DATABASE_URL) {
       console.log("Using PrismaStore (Database Persistence Enabled)");
       globalForStore.__omniscientStore = new PrismaStore();
     } else {
-      console.log(`Using InMemoryStore (Ephemeral Storage${useInMemory ? " - Forced" : ""})`);
+      console.log(`Using InMemoryStore (Ephemeral Storage${useInMemory && process.env.USE_IN_MEMORY_STORE === "true" ? " - Forced" : ""})`);
       globalForStore.__omniscientStore = createDemoStore();
     }
   }
