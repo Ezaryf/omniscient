@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { PanelLeft, PanelRight, PanelBottom } from "lucide-react";
 import type { BoardSelection, CampaignSetupDraft, CanvasBinding, TimelineBranch } from "@/lib/sim/types";
 import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { ReactFlowWorldCanvas } from "@/components/workspace/react-flow-world-ca
 import { type BoardTool, type WorldCanvasHandle, type WorldCanvasUiState } from "@/components/workspace/world-canvas";
 import { InjectEventModal } from "@/components/workspace/inject-event-modal";
 import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
+import { BattleNarrativeInline } from "@/components/workspace/battle-narrative-inline";
 import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
 import { DEMO_PROJECT_ID } from "@/lib/server/store";
 
@@ -129,6 +131,7 @@ function WorkspaceContent() {
     isNewSimulation,
     setupStatus,
     setupDraft,
+    layoutPositions,
     setProject,
     setProjectMeta,
     setBranch,
@@ -141,6 +144,14 @@ function WorkspaceContent() {
     setSetupStatus,
     sync,
   } = useSimulationStore();
+
+  const agents = useMemo(() => worldState?.agents ?? [], [worldState?.agents]);
+  const boardLinks = useMemo(() => worldState?.boardLinks ?? [], [worldState?.boardLinks]);
+  const campaignNodes = useMemo(() => worldState?.campaignNodes ?? [], [worldState?.campaignNodes]);
+  const relationships = useMemo(() => worldState?.relationships ?? [], [worldState?.relationships]);
+  const fronts = useMemo(() => worldState?.fronts ?? [], [worldState?.fronts]);
+  const worldMap = useMemo(() => worldState?.map ?? { id: "map", name: "Map", regions: [], sites: [], routes: [], tokens: [] }, [worldState?.map]);
+
   const resolvedProjectMeta =
     projectMeta ?? (projectId === DEMO_PROJECT_ID ? demoProjectMeta : null);
   const activeBranch = branches.find((candidate) => candidate.id === branchId) ?? null;
@@ -187,14 +198,52 @@ function WorkspaceContent() {
     [setBranches]
   );
 
+  // Auto-dismiss setup sidecar when timeline is launched
+  useEffect(() => {
+    if (setupStatus === "applied") {
+      setShowSetup(false);
+    }
+  }, [setupStatus]);
+
+  const isFocusMode = layout.leftCollapsed && layout.rightCollapsed && layout.timelineCollapsed;
+  const toggleFocusMode = () => {
+    if (isFocusMode) {
+      if (layout.leftCollapsed) toggleDock("left");
+      if (layout.rightCollapsed) toggleDock("right");
+      if (layout.timelineCollapsed) toggleDock("timeline");
+    } else {
+      if (!layout.leftCollapsed) toggleDock("left");
+      if (!layout.rightCollapsed) toggleDock("right");
+      if (!layout.timelineCollapsed) toggleDock("timeline");
+    }
+  };
+
+  // Ref to track last synced query to prevent dependency loops
+  const lastSyncedQueryRef = useRef<string | null>(null);
+
+  // Sync state to URL search parameters
   useEffect(() => {
     if (workspaceSurface !== "map") return;
-    updateWorkspaceQuery({
+    
+    const queryPayload = {
       tool: boardUiState.activeTool === "inspect" ? null : boardUiState.activeTool,
       selectionType: selectedEntity?.type ?? null,
       selectionId: selectedEntity?.id ?? null,
+    };
+    
+    // Create query string to check for changes before calling update
+    const nextParams = new URLSearchParams(searchParams.toString());
+    Object.entries(queryPayload).forEach(([key, value]) => {
+      if (!value) nextParams.delete(key);
+      else nextParams.set(key, value);
     });
-  }, [boardUiState.activeTool, selectedEntity, updateWorkspaceQuery, workspaceSurface]);
+    
+    const nextQuery = nextParams.toString();
+    if (nextQuery === lastSyncedQueryRef.current) return;
+    
+    lastSyncedQueryRef.current = nextQuery;
+    updateWorkspaceQuery(queryPayload);
+  }, [boardUiState.activeTool, selectedEntity?.id, selectedEntity?.type, updateWorkspaceQuery, workspaceSurface, searchParams]);
 
   useEffect(() => {
     setProject(projectId);
@@ -745,6 +794,9 @@ function WorkspaceContent() {
     if (syncInFlightRef.current) {
       return;
     }
+    if (state.simulationMode === "battle") {
+      return;
+    }
 
     syncInFlightRef.current = true;
     try {
@@ -828,43 +880,32 @@ function WorkspaceContent() {
         } as CSSProperties
       }
     >
-      <header className="workspace-header">
-        <div className="workspace-header-row">
+      <header className="workspace-header flex items-center justify-between px-3 py-2 border-b border-(--border-subtle) bg-(--bg-shell)">
+        <div className="flex items-center gap-3">
           <Link
             href="/"
-            className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+            className="flex h-8 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-panel) px-2 text-[11px] font-semibold uppercase tracking-widest text-(--text-secondary) transition hover:text-(--text-primary)"
+            title="Back to Simulations"
           >
-            &larr; Simulations
+            &larr;
           </Link>
-          <div className="h-4 w-px bg-[var(--border-subtle)]" />
-          <div className="workspace-title">
-            <strong>{resolvedProjectMeta?.name ?? "Campaign Workspace"}</strong>
-            <span>
-              {resolvedProjectMeta?.description ||
-                "Shape the first consequence, then watch the map answer back."}
-            </span>
+          <div className="flex flex-col">
+            <strong className="text-sm font-semibold tracking-[-0.02em] text-(--text-primary) leading-tight">
+              {resolvedProjectMeta?.name ?? "Campaign Workspace"}
+            </strong>
+            {setupStatus !== "applied" && (
+              <span className="text-[10px] font-medium uppercase text-(--status-warning) leading-tight">Setup pending</span>
+            )}
           </div>
-
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Badge variant="accent">
-              {workspaceSurface === "map" ? "Campaign Map" : "Freeform Canvas"}
-            </Badge>
-            <Badge variant="default">{activeBranch?.name ?? "No branch selected"}</Badge>
-            <Badge variant={setupStatus === "applied" ? "success" : "warning"}>
-              {setupStatus === "applied" ? "Setup applied" : "Setup pending"}
-            </Badge>
-          </div>
-        </div>
-
-        <div className="workspace-header-row">
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1">
+          
+          <div className="ml-3 flex items-center gap-1 rounded-md border border-(--border-subtle) bg-(--bg-panel) p-0.5">
             <button
               type="button"
               onClick={() => handleSetSurface("map")}
-              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+              className={`rounded px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
                 workspaceSurface === "map"
-                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
-                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  ? "bg-(--bg-elevated) text-(--text-primary) shadow-sm"
+                  : "text-(--text-secondary) hover:text-(--text-primary)"
               }`}
             >
               Map
@@ -872,65 +913,17 @@ function WorkspaceContent() {
             <button
               type="button"
               onClick={() => handleSetSurface("canvas")}
-              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+              className={`rounded px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
                 workspaceSurface === "canvas"
-                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
-                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  ? "bg-(--bg-elevated) text-(--text-primary) shadow-sm"
+                  : "text-(--text-secondary) hover:text-(--text-primary)"
               }`}
             >
               Canvas
             </button>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
-              onClick={() => toggleDock("left")}
-            >
-              {layout.leftCollapsed ? "World" : "Hide world"}
-            </button>
-            <button
-              type="button"
-              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
-              onClick={() => toggleDock("right")}
-            >
-              {layout.rightCollapsed ? "Context" : "Hide context"}
-            </button>
-            <button
-              type="button"
-              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
-              onClick={() => toggleDock("timeline")}
-            >
-              {layout.timelineCollapsed ? "Timeline" : "Hide timeline"}
-            </button>
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
-            <label
-              htmlFor="branch-select"
-              className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]"
-            >
-              Branch
-            </label>
-            <select
-              id="branch-select"
-              value={branchId ?? ""}
-              onChange={(event) => handleSelectBranch(event.target.value)}
-              className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-sm text-[var(--text-primary)] outline-none"
-            >
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>
-                  {branch.name}
-                </option>
-              ))}
-            </select>
-            <Badge variant="default">Tick {worldState?.tick ?? 0}</Badge>
-          </div>
         </div>
-      </header>
 
-      <div className="workspace-control">
         <ControlBar
           projectId={projectId}
           onStep={executeTick}
@@ -944,9 +937,73 @@ function WorkspaceContent() {
             setSetupStatus(setupDraft ? "ready" : "drafting");
           }}
         />
-      </div>
 
-      <div className="workspace-main">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 border-r border-[var(--border-subtle)] pr-3 mr-1">
+            <label
+              htmlFor="branch-select"
+              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-(--text-muted)"
+            >
+              Branch
+            </label>
+            <select
+              id="branch-select"
+              value={branchId ?? ""}
+              onChange={(event) => handleSelectBranch(event.target.value)}
+              className="h-8 rounded-md border border-(--border-subtle) bg-(--bg-panel) px-2 text-xs text-(--text-primary) outline-none"
+            >
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <Button
+              variant={layout.leftCollapsed ? "ghost" : "secondary"}
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => toggleDock("left")}
+              title="Toggle World Panel"
+            >
+              <PanelLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={layout.timelineCollapsed ? "ghost" : "secondary"}
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => toggleDock("timeline")}
+              title="Toggle Timeline"
+            >
+              <PanelBottom className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={layout.rightCollapsed ? "ghost" : "secondary"}
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => toggleDock("right")}
+              title="Toggle Context Panel"
+            >
+              <PanelRight className="h-4 w-4" />
+            </Button>
+            <div className="mx-1 h-4 w-px bg-(--border-subtle)" />
+            <Button
+              variant={isFocusMode ? "primary" : "ghost"}
+              size="sm"
+              className="h-8 px-2 text-[10px] font-bold uppercase tracking-wider"
+              onClick={toggleFocusMode}
+              title={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
+            >
+              {isFocusMode ? "Exit Focus" : "Focus"}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="workspace-main relative">
+        <BattleNarrativeInline />
         <div className="workspace-panel workspace-panel-left">
           {layout.leftCollapsed ? (
             <CollapsedDock label="World" onExpand={() => toggleDock("left")} />
@@ -990,12 +1047,12 @@ function WorkspaceContent() {
           ) : (
             <ReactFlowWorldCanvas
               ref={worldCanvasRef}
-              agents={worldState?.agents ?? []}
-              boardLinks={worldState?.boardLinks ?? []}
-              campaignNodes={worldState?.campaignNodes ?? []}
-              relationships={worldState?.relationships ?? []}
-              map={worldState?.map ?? { id: "map", name: "Map", regions: [], sites: [], routes: [], tokens: [] }}
-              fronts={worldState?.fronts ?? []}
+              agents={agents}
+              boardLinks={boardLinks}
+              campaignNodes={campaignNodes}
+              relationships={relationships}
+              map={worldMap}
+              fronts={fronts}
               selectedEntity={selectedEntity}
               onSelectEntity={setSelectedEntity}
               onMoveToken={onMoveToken}
@@ -1013,6 +1070,7 @@ function WorkspaceContent() {
               onRequestDeleteSelection={requestDeleteSelection}
               initialTool={(searchParams.get("tool") as BoardTool | null) ?? "inspect"}
               onToolStateChange={setBoardUiState}
+              layoutPositions={layoutPositions}
             />
           )}
         </div>
@@ -1139,11 +1197,11 @@ function WorkspaceContent() {
       ) : null}
 
       {deleteFeedback ? (
-        <div className="absolute right-4 top-[7.5rem] z-30">
-          <div className={`rounded-xl border px-4 py-3 shadow-[0_16px_42px_rgba(0,0,0,0.38)] backdrop-blur-xl ${
+        <div className="absolute right-6 bottom-6 z-50">
+          <div className={`rounded-xl border px-5 py-3 shadow-[0_22px_52px_rgba(0,0,0,0.45)] backdrop-blur-2xl ${
             deleteFeedback.tone === "success"
-              ? "border-[rgba(45,212,191,0.25)] bg-[rgba(15,31,38,0.92)] text-[#a7f3d0]"
-              : "border-[rgba(255,107,107,0.24)] bg-[rgba(37,16,19,0.94)] text-[#ffb4b4]"
+              ? "border-(--status_success)/30 bg-(--bg-panel)/92 text-(--status-success)"
+              : "border-(--status_danger)/25 bg-(--bg-panel)/94 text-(--status-danger)"
           }`}>
             <div className="text-sm font-medium">{deleteFeedback.message}</div>
           </div>

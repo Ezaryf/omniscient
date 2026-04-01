@@ -1,26 +1,30 @@
 "use client";
 
-import { Blocks, Pin, Siren, Trash2, Waves } from "lucide-react";
-import type { CampaignNode, GmNote, ProjectionArtifact } from "@/lib/sim/types";
+import { Activity, Building2, ChevronRight, Map as MapIcon, Pin, Trash2, Users, Zap, Siren } from "lucide-react";
+import type { CampaignNode, GmNote, ProjectionArtifact, FrontClock } from "@/lib/sim/types";
 import { useSimulationStore } from "@/lib/stores/simulation-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DockPanel, PanelHeader } from "@/components/ui/dock-panel";
-import { EmptyState } from "@/components/ui/empty-state";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface ScenarioPanelProps {
-  branchName?: string | null;
-  tick?: number;
-  campaignNodes: CampaignNode[];
-  selectedNodeId?: string | null;
-  onAdvanceFront: (frontId: string, delta: number, rationale: string) => void;
-  onAcknowledgeProjection: (projectionId: string, note: string) => void;
-  onSelectNode: (nodeId: string) => void;
-  onDeleteNode: (nodeId: string) => void;
-  onGenerateNarrative?: () => void;
+  readonly branchName?: string | null;
+  readonly tick?: number;
+  readonly campaignNodes: readonly CampaignNode[];
+  readonly selectedNodeId?: string | null;
+  readonly onAdvanceFront: (frontId: string, delta: number, rationale: string) => void;
+  readonly onAcknowledgeProjection: (projectionId: string, note: string) => void;
+  readonly onSelectNode: (nodeId: string) => void;
+  readonly onDeleteNode: (nodeId: string) => void;
+  readonly onGenerateNarrative?: () => void;
 }
 
+/**
+ * World Intelligence Panel (ScenarioPanel)
+ * A premium, ultra-minimalist command center for tracking the simulation's state.
+ * Emphasizes glassmorphism, monochrome with subtle tactical accents, and high-quality whitespace.
+ */
 export function ScenarioPanel({
   branchName,
   tick,
@@ -32,123 +36,144 @@ export function ScenarioPanel({
   onDeleteNode,
   onGenerateNarrative,
 }: ScenarioPanelProps) {
-  const { worldState, showProjections } = useSimulationStore();
+  const worldState = useSimulationStore((state) => state.worldState);
   const fronts = worldState?.fronts ?? [];
-  const projections = (worldState?.projections ?? []) as ProjectionArtifact[];
-  const notes = (worldState?.gmNotes ?? []) as GmNote[];
+  const projections = worldState?.projections ?? [];
+  const notes = worldState?.gmNotes ?? [];
 
   return (
-    <DockPanel className="flex flex-col bg-[var(--bg-dock)]">
-      <PanelHeader
-        title="World intelligence"
-        description="Map-first signal rail for strategic pressure, explainable fallout, and prep-ready context. Selected-object detail lives in the Context Inspector on the right."
-        action={
+    <div className="flex h-full flex-col bg-slate-950/20 backdrop-blur-3xl">
+      {/* Integrated Premium Header */}
+      <div className="flex flex-col gap-1 p-6 pb-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-(--text-primary) opacity-90">
+            World Intelligence
+          </h2>
           <div className="flex items-center gap-2">
-            {branchName ? <Badge variant="accent">{branchName}</Badge> : null}
-            <Badge variant="default">T{tick ?? 0}</Badge>
-            <Badge variant="default">{fronts.length + projections.length + notes.length} signals</Badge>
+            <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+            <span className="font-mono text-[10px] font-bold tracking-widest text-(--text-muted)">LIVE</span>
           </div>
-        }
-      />
+        </div>
+        <div className="flex items-center gap-2 text-[11px] font-medium text-(--text-muted)">
+          <span className="text-white/40">{branchName ?? "MAIN_SEQUENCE"}</span>
+          <span className="h-1 w-1 rounded-full bg-white/10" />
+          <span className="font-mono text-cyan-500/80">T{tick?.toString().padStart(3, "0") ?? "000"}</span>
+        </div>
+      </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-5 p-4">
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Blocks className="h-4 w-4 text-[var(--text-secondary)]" />
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">Node library</h3>
-              </div>
-              <Badge variant="default">{campaignNodes.length}</Badge>
-            </div>
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-10 p-6 pt-2">
+          {/* HUD Tactical Summary */}
+          <div className="flex items-stretch gap-px overflow-hidden rounded-xl border border-white/5 bg-white/2 shadow-2xl">
+            <TacticalMetric label="ACTORS" value={worldState?.agents.length ?? 0} />
+            <div className="w-px bg-white/5" />
+            <TacticalMetric label="NODES" value={campaignNodes.length} />
+            <div className="w-px bg-white/5" />
+            <TacticalMetric label="THREATS" value={fronts.length} tone="text-orange-400" />
+          </div>
+
+          {/* Borderless Node Registry */}
+          <section className="space-y-4">
+            <header className="flex items-center justify-between px-1">
+              <h3 className="text-[9px] font-black uppercase tracking-[0.25em] text-(--text-primary) opacity-30">Registry</h3>
+              <span className="font-mono text-[10px] font-bold text-white/20">{campaignNodes.length.toString().padStart(2, "0")}</span>
+            </header>
 
             {campaignNodes.length === 0 ? (
               <EmptyState
-                title="No nodes on the board yet"
-                copy="Create actors, factions, places, fronts, and events on the canvas to manage them here."
+                title="Board is Clear"
+                copy="Deploy entities from the canvas to monitor their lifecycle."
               />
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-0.5">
                 {campaignNodes.map((node) => (
                   <div
                     key={node.id}
-                    className={`flex items-center gap-2 rounded-lg border p-3 transition ${
-                      selectedNodeId === node.id
-                        ? "border-[var(--border-strong)] bg-[var(--bg-elevated)]"
-                        : "border-[var(--border-subtle)] bg-[var(--bg-panel)]"
+                    className={`group relative flex items-center justify-between rounded-lg py-1.5 pl-3 pr-1 transition-all duration-300 ${
+                      selectedNodeId === node.id 
+                        ? "bg-white/5 shadow-sm" 
+                        : "hover:bg-white/2"
                     }`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => onSelectNode(node.id)}
-                      className="min-w-0 flex-1 text-left"
-                    >
-                      <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{node.name}</div>
-                      <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">
-                        {node.kind}
+                    {/* Selection Rail */}
+                    {selectedNodeId === node.id && (
+                      <div className="absolute left-0 top-1/2 h-3.5 w-0.5 -translate-y-1/2 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
+                    )}
+
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className={`flex h-6 w-6 items-center justify-center rounded border border-white/5 bg-white/2 transition-transform group-hover:scale-105 ${getNodeColorClass(node.kind)}`}>
+                        <NodeIcon kind={node.kind} />
                       </div>
-                    </button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => onDeleteNode(node.id)}
-                      className="h-8 w-8 shrink-0 px-0 text-[var(--text-secondary)] hover:text-[var(--status-danger)]"
-                      aria-label={`Delete ${node.name}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                      <button
+                        onClick={() => onSelectNode(node.id)}
+                        className={`truncate text-[13px] font-semibold tracking-tight transition-colors ${
+                          selectedNodeId === node.id ? "text-white" : "text-(--text-secondary) group-hover:text-white"
+                        }`}
+                      >
+                        {node.name}
+                      </button>
+                    </div>
+                    
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-md text-(--text-muted) opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+                        onClick={() => onDeleteNode(node.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
           </section>
 
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
+          {/* Fronts / Escalation Rail */}
+          <section className="space-y-4">
+            <header className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
-                <Siren className="h-4 w-4 text-[var(--text-secondary)]" />
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">Fronts</h3>
+                <Siren className="h-3 w-3 text-orange-500 opacity-60" />
+                <h3 className="text-[9px] font-black uppercase tracking-[0.25em] text-(--text-primary) opacity-30">Active Fronts</h3>
               </div>
-              <Badge variant="warning">{fronts.length}</Badge>
-            </div>
+            </header>
 
             {fronts.length === 0 ? (
-              <EmptyState
-                title="No active fronts yet"
-                copy="Approve the guided setup to place the first pressure lines on the map."
-              />
+              <EmptyState title="Sectors Quiet" copy="No active threats currently projected." />
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {fronts.map((front) => (
-                  <div key={front.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-base font-semibold tracking-[-0.03em]">{front.name}</div>
-                        <div className="mt-1 text-sm text-[var(--text-secondary)]">{front.stakes}</div>
+                  <div key={front.id} className="group rounded-xl border border-white/5 bg-white/2 p-4 transition-all hover:bg-white/4">
+                    <div className="mb-4 flex items-start justify-between">
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-bold tracking-tight text-white">{front.name}</div>
+                        <div className="mt-1 line-clamp-1 text-[11px] text-(--text-muted)/80">{front.stakes}</div>
                       </div>
-                      <Badge variant={front.status === "rising" ? "warning" : "default"}>{front.status}</Badge>
+                      <Badge className="h-4.5 rounded px-1.5 text-[8px] font-black tracking-widest transition-colors group-hover:bg-orange-500 group-hover:text-white">
+                        {front.status.toUpperCase()}
+                      </Badge>
                     </div>
 
                     <div className="space-y-3">
-                      <MetricRow label="Progress" value={front.progress} tone="bg-[#d95252]" />
-                      <MetricRow label="Pressure" value={front.pressure} tone="bg-[#8d959d]" />
+                      <DynamicProgress label="PROGRESS" value={front.progress} tone="bg-orange-500" />
+                      <DynamicProgress label="PRESSURE" value={front.pressure} tone="bg-cyan-500" />
                     </div>
 
-                    <div className="mt-4 flex gap-2">
+                    <div className="mt-5 flex gap-2">
                       <Button
-                        variant="ghost"
+                        variant="ghost" 
                         size="sm"
-                        onClick={() => onAdvanceFront(front.id, -0.12, "GM cooled this front for the next session.")}
-                        type="button"
+                        onClick={() => onAdvanceFront(front.id, -0.12, "GM neutralized front pressure.")}
+                        className="h-7.5 flex-1 bg-white/2 text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-all"
                       >
                         Ease
                       </Button>
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => onAdvanceFront(front.id, 0.12, "GM escalated this front for stronger pressure.")}
-                        type="button"
+                        onClick={() => onAdvanceFront(front.id, 0.12, "GM escalated front tension.")}
+                        className="h-7.5 flex-1 bg-white/5 text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all"
                       >
                         Escalate
                       </Button>
@@ -159,105 +184,89 @@ export function ScenarioPanel({
             )}
           </section>
 
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
+          {/* Intelligence Log / GM Workspace */}
+          <section className="space-y-4">
+            <header className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
-                <Waves className="h-4 w-4 text-[var(--text-secondary)]" />
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">Prep signals</h3>
+                 <Pin className="h-3 w-3 text-emerald-500 opacity-60" />
+                 <h3 className="text-[9px] font-black uppercase tracking-[0.25em] text-(--text-primary) opacity-30">Intelligence Log</h3>
               </div>
-              <Badge variant={showProjections ? "accent" : "default"}>{projections.length}</Badge>
-            </div>
+              {onGenerateNarrative && (
+                <Button variant="ghost" size="sm" onClick={onGenerateNarrative} className="h-5 px-1.5 text-[8px] font-black uppercase tracking-widest text-emerald-500 hover:bg-emerald-500/10">
+                  REFRESH
+                </Button>
+              )}
+            </header>
 
-            {projections.length === 0 ? (
-              <EmptyState
-                title="Prep signals will appear here"
-                copy="Once the first consequence lands, this rail will start surfacing risks, hot routes, and next-session fallout."
-              />
-            ) : (
-              <div className="space-y-3">
-                {projections.map((projection) => (
-                  <div key={projection.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <div className="text-sm font-semibold text-[var(--text-primary)]">{projection.title}</div>
-                      <Badge variant={projection.type === "prediction" ? "warning" : "default"}>{projection.type}</Badge>
-                    </div>
-                    <p className="text-sm leading-6 text-[var(--text-secondary)]">{projection.summary}</p>
-                    <div className="mt-3 flex items-center justify-between gap-2 text-xs uppercase tracking-[0.14em] text-[var(--text-muted)]">
-                      <span>{Math.round(projection.confidence * 100)}% confidence</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onAcknowledgeProjection(projection.id, projection.summary)}
-                        type="button"
-                      >
-                        Pin to prep
-                      </Button>
+            <div className="space-y-3">
+              {notes.length === 0 ? (
+                <EmptyState title="Log Empty" copy="Synchronize with consequence engine." />
+              ) : (
+                notes.map((note) => (
+                  <div key={note.id} className="rounded-xl border border-white/5 bg-white/2 p-4 transition-all hover:border-white/10 hover:bg-white/4">
+                    <div className="mb-1 text-[12px] font-bold text-white">{note.title}</div>
+                    <p className="text-[11px] leading-relaxed text-(--text-secondary)">{note.content}</p>
+                    <div className="mt-3 flex items-center justify-between border-t border-white/3 pt-2.5">
+                       <span className="font-mono text-[9px] text-white/20">SEQ_{note.tick.toString().padStart(3, "0")}</span>
+                       <span className={`text-[9px] font-bold uppercase tracking-widest ${note.status === "resolved" ? "text-emerald-500" : "text-white/30"}`}>
+                        {note.status}
+                       </span>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Pin className="h-4 w-4 text-[var(--text-secondary)]" />
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-primary)]">GM notes</h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge>{notes.length}</Badge>
-                {onGenerateNarrative && (
-                  <Button variant="outline" size="sm" onClick={onGenerateNarrative} type="button" className="h-6 px-2 text-xs">
-                    Generate
-                  </Button>
-                )}
-              </div>
+                ))
+              )}
             </div>
-
-            {notes.length === 0 ? (
-              <EmptyState
-                title="Pin campaign intent first"
-                copy="The onboarding sidecar will generate the premise, factions, and opening rupture before session prep starts piling up here."
-              />
-            ) : (
-              <div className="space-y-3">
-                {notes.map((note) => (
-                  <div key={note.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-                    <div className="mb-2 text-sm font-semibold text-[var(--text-primary)]">{note.title}</div>
-                    <p className="text-sm leading-6 text-[var(--text-secondary)]">{note.content}</p>
-                    <div className="mt-3 text-xs uppercase tracking-[0.14em] text-[var(--text-muted)]">
-                      Tick {note.tick} · {note.status}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </div>
       </ScrollArea>
-    </DockPanel>
+    </div>
   );
 }
 
-function MetricRow({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: string;
-}) {
+function TacticalMetric({ label, value, tone = "text-(--text-primary)" }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center gap-1 px-2 py-3 transition-colors hover:bg-white/5">
+      <span className="text-[18px] font-black transition-transform duration-500 group-hover:scale-110 font-mono tracking-tighter">
+        {value.toString().padStart(2, "0")}
+      </span>
+      <span className={`text-[8px] font-black uppercase tracking-[0.2em] opacity-40 ${tone}`}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function DynamicProgress({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+      <div className="flex items-center justify-between font-mono text-[9px] font-bold uppercase tracking-widest opacity-40">
         <span>{label}</span>
-        <span>{Math.round(value * 100)}%</span>
+        <span>{(value * 100).toFixed(0)}%</span>
       </div>
-      <div className="h-1.5 rounded-full bg-white/6">
-        <div className={`h-1.5 rounded-full ${tone}`} style={{ width: `${value * 100}%` }} />
+      <div className="h-1 rounded-full bg-white/5">
+        <div 
+          className={`h-full rounded-full transition-all duration-700 ease-out ${tone} shadow-[0_0_8px_rgba(255,255,255,0.1)]`} 
+          style={{ width: `${value * 100}%` }} 
+        />
       </div>
     </div>
   );
+}
+
+function getNodeColorClass(kind: string): string {
+  switch (kind) {
+    case "agent": return "text-cyan-400 group-hover:border-cyan-500/30";
+    case "region": return "text-amber-400 group-hover:border-amber-500/30";
+    case "site": return "text-emerald-400 group-hover:border-emerald-500/30";
+    default: return "text-(--text-muted) group-hover:border-white/20";
+  }
+}
+
+function NodeIcon({ kind }: { readonly kind: string }) {
+  switch (kind) {
+    case "agent": return <Users className="h-3 w-3" />;
+    case "region": return <MapIcon className="h-3 w-3" />;
+    case "site": return <Building2 className="h-3 w-3" />;
+    default: return <ChevronRight className="h-3 w-3" />;
+  }
 }
