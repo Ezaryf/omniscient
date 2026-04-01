@@ -138,6 +138,7 @@ function WorkspaceContent() {
     setLastProposals,
     setSetupStatus,
     sync,
+    clearBranchState,
   } = useSimulationStore();
 
   const agents = useMemo(() => worldState?.agents ?? [], [worldState?.agents]);
@@ -767,6 +768,7 @@ function WorkspaceContent() {
 
   const handleSelectBranch = useCallback(
     (nextBranchId: string) => {
+      clearBranchState();
       setBranch(nextBranchId);
       const candidate = branches.find((branch) => branch.id === nextBranchId);
       if (candidate?.latestState) {
@@ -774,7 +776,7 @@ function WorkspaceContent() {
       }
       updateWorkspaceQuery({ branchId: nextBranchId });
     },
-    [branches, setBranch, setWorldState, updateWorkspaceQuery]
+    [branches, clearBranchState, setBranch, setWorldState, updateWorkspaceQuery]
   );
 
   const handleSetSurface = useCallback(

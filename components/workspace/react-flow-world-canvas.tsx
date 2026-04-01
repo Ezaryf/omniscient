@@ -347,6 +347,14 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
 ) {
   const reactFlowRef = useRef<ReactFlowInstance<Node<WorldNodeData>, Edge> | null>(null);
   const pendingNodePositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+
+  useEffect(() => {
+    return () => {
+      reactFlowRef.current = null;
+      pendingNodePositionsRef.current = {};
+    };
+  }, []);
+
   const [optimisticLink, setOptimisticLink] = useState<any>(null);
   const [primaryTool, setPrimaryTool] = useState<"inspect" | "move">(initialTool === "move" ? "move" : "inspect");
   const [addMode, setAddMode] = useState<AddMode>("none");
@@ -435,20 +443,33 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<Node<WorldNodeData>>(baseNodes);
 
   useEffect(() => {
-    setFlowNodes(current => {
-      let changed = false;
-      const currentById = new Map(current.map(n => [n.id, n]));
-      const next = baseNodes.map(node => {
+    setFlowNodes((current) => {
+      const currentById = new Map(current.map((n) => [n.id, n]));
+      let hasStructuralChange = false;
+      const next = baseNodes.map((node) => {
         const curr = currentById.get(node.id);
         const pending = pendingNodePositionsRef.current[node.id];
         const targetPos = pending ?? (curr?.dragging ? curr.position : node.position);
-        if (!curr || JSON.stringify(curr.data) !== JSON.stringify(node.data) || curr.selected !== node.selected || Math.abs(curr.position.x - targetPos.x) > 0.1) {
-          changed = true;
+        
+        if (!curr) {
+          hasStructuralChange = true;
+          return { ...node, position: targetPos };
+        }
+
+        const dataChanged = JSON.stringify(curr.data) !== JSON.stringify(node.data);
+        const selectionChanged = curr.selected !== node.selected;
+        const positionDrifted = Math.abs(curr.position.x - targetPos.x) > 0.1 || Math.abs(curr.position.y - targetPos.y) > 0.1;
+
+        if (dataChanged || selectionChanged || positionDrifted) {
           return { ...node, position: targetPos };
         }
         return curr;
       });
-      return changed || next.length !== current.length ? next : current;
+
+      if (hasStructuralChange || next.length !== current.length) return next;
+      
+      const hasAnyChanges = next.some((node, i) => node !== current[i]);
+      return hasAnyChanges ? next : current;
     });
     pendingNodePositionsRef.current = {};
   }, [baseNodes, setFlowNodes]);
@@ -487,11 +508,29 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
     if (activeTool === "connect") {
       const parts = node.id.split(":");
       const sel: ConnectableSelection = { type: parts[0] as any, id: parts[1] };
-      if (!connectionSourceKey || connectionSourceKey === CONNECT_ARMED) { setConnectionSourceKey(node.id); onSelectEntity({ type: sel.type, id: sel.id }); }
-      else {
+      
+      if (!connectionSourceKey || connectionSourceKey === CONNECT_ARMED) {
+        setConnectionSourceKey(node.id);
+        onSelectEntity({ type: sel.type, id: sel.id });
+      } else {
         const [st, si] = connectionSourceKey.split(":");
-        if (node.id !== connectionSourceKey) onCreateBoardLink({ linkType, source: { type: st as any, id: si }, target: sel });
-        setConnectionSourceKey(null);
+        if (node.id !== connectionSourceKey) {
+          // We wait for the creation to be queued/processed before clearing the source key
+          // This prevents the "flash" of the old state while the new link is being added,
+          // which is often what triggers the React Flow removeChild crash.
+          void onCreateBoardLink({ 
+            linkType, 
+            source: { type: st as any, id: si }, 
+            target: sel 
+          }).then(() => {
+            // Delay clearing by a frame to let React Flow finish its event cycle
+            requestAnimationFrame(() => setConnectionSourceKey(null));
+          }).catch(() => {
+            setConnectionSourceKey(null);
+          });
+        } else {
+          setConnectionSourceKey(null);
+        }
       }
       return;
     }

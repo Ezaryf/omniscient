@@ -155,7 +155,10 @@ interface SimulationState {
   sync: () => Promise<void>;
   currentTick: () => number;
   aliveAgentCount: () => number;
+  clearBranchState: () => void;
 }
+
+const MAX_EVENTS = 500;
 
 function isBlankWorldState(state: WorldState | null) {
   if (!state) return true;
@@ -377,7 +380,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         return updated ?? relationship;
       });
 
-      const nextEvents = [...previous.worldState.events, ...delta.newEvents].slice(-200);
+      const nextEvents = [...previous.worldState.events, ...delta.newEvents].slice(-MAX_EVENTS);
       const nextState: WorldState = {
         ...previous.worldState,
         tick: delta.tick,
@@ -527,6 +530,18 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   currentTick: () => get().worldState?.tick ?? 0,
   aliveAgentCount: () =>
     get().worldState?.agents.filter((agent) => agent.status === "alive").length ?? 0,
+  clearBranchState: () => set({
+    worldState: null,
+    recentEvents: [],
+    lastProposals: [],
+    projections: [],
+    battleFrames: [],
+    battleEvents: [],
+    battleCurrentFrame: 0,
+    battleWarnings: [],
+    battleNarrative: "",
+    layoutPositions: new Map(),
+  }),
   setLayoutMode: (mode) => set({ layoutMode: mode }),
   setLayoutPositions: (positions) => set({ layoutPositions: positions }),
   applyAutoLayout: () => {
