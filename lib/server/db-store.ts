@@ -25,8 +25,11 @@ export class PrismaStore implements SimulationStore {
     };
   }
 
-  async listProjects(): Promise<ProjectRecord[]> {
-    const ps = await prisma.project.findMany({ orderBy: { createdAt: "desc" } });
+  async listProjects(userId: string): Promise<ProjectRecord[]> {
+    const ps = await prisma.project.findMany({ 
+      where: { ownerId: userId },
+      orderBy: { createdAt: "desc" } 
+    });
     return ps.map((p) => ({
       id: p.id,
       ownerId: p.ownerId,

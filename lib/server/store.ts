@@ -176,7 +176,9 @@ export class InMemoryStore implements SimulationStore {
   ledger = new Map<string, any>(); // Key: branchId:tick
 
   async getProject(id: string) { return this.projects.get(id) || null; }
-  async listProjects() { return Array.from(this.projects.values()); }
+  async listProjects(userId: string) { 
+    return Array.from(this.projects.values()).filter(p => p.ownerId === userId || p.ownerId === "user-demo"); 
+  }
   async saveProject(p: ProjectRecord) { this.projects.set(p.id, p); }
   async deleteProject(id: string) {
     this.projects.delete(id);

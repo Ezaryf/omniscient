@@ -48,7 +48,11 @@ export async function DELETE(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  if (project.ownerId !== session.user.id) {
+  const canDeleteProject =
+    project.ownerId === session.user.id ||
+    (project.ownerId === "user-demo" && (session.user.id === "dev-user-id" || session.user.id === "user-demo"));
+
+  if (!canDeleteProject) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

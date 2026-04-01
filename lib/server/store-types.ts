@@ -12,7 +12,7 @@ import {
 export interface SimulationStore {
   // Projects
   getProject(id: string): Promise<ProjectRecord | null>;
-  listProjects(): Promise<ProjectRecord[]>;
+  listProjects(userId: string): Promise<ProjectRecord[]>;
   saveProject(project: ProjectRecord): Promise<void>;
   deleteProject(id: string): Promise<void>;
 

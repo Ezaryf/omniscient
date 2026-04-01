@@ -17,7 +17,7 @@ export async function GET() {
   }
 
   const store = getStore();
-  const projects = await store.listProjects();
+  const projects = await store.listProjects(session.user.id);
 
   return NextResponse.json({ projects });
 }
