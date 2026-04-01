@@ -10,6 +10,9 @@
     "test:watch": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs",
     "prisma:generate": "prisma generate"
   },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@auth/prisma-adapter": "latest",
     "@prisma/client": "^5.22.0",
