@@ -13,69 +13,53 @@ interface UseCanvasNodesProps {
   connectionSourceKey: string | null;
   frontNodes: Array<{ front: FrontClock; position: Position }>;
   layoutPositions?: Map<string, { x: number; y: number }>;
-  tieredPositions?: Record<string, { x: number; y: number }> | null;
+  tieredPositions?: Map<string, { x: number; y: number }> | null;
   hasActiveSpotlight: boolean;
   connectedNodeIds: Set<string>;
   flowNodeId: (type: string, id: string) => string;
   nodeTypeForKind: (kind: string | undefined) => string;
-  flowPosition: (position: Position, layoutPositions?: any, nodeId?: string) => Position;
+  flowPosition: (position: Position, layoutPositions?: Map<string, { x: number; y: number }> | null, nodeId?: string) => Position;
   accentFor: (kind: string) => string;
   showFronts: boolean;
   showRegions: boolean;
 }
 
 export function useCanvasNodes({
-  agents,
-  campaignNodes,
-  map,
-  fronts,
-  selectedEntity,
-  activeTool,
-  connectionSourceKey,
-  frontNodes,
-  layoutPositions,
-  tieredPositions,
-  hasActiveSpotlight,
-  connectedNodeIds,
-  flowNodeId,
-  nodeTypeForKind,
-  flowPosition,
-  accentFor,
-  showFronts,
-  showRegions,
+  agents, campaignNodes, map, fronts, selectedEntity, activeTool,
+  connectionSourceKey, frontNodes, layoutPositions, tieredPositions,
+  hasActiveSpotlight, connectedNodeIds, flowNodeId, nodeTypeForKind,
+  flowPosition, accentFor, showFronts, showRegions,
 }: UseCanvasNodesProps) {
   return useMemo<Node<WorldNodeData>[]>(() => {
-    const flowNodes: Node<WorldNodeData>[] = [];
     const effectiveLayout = tieredPositions ?? layoutPositions;
+    const isDraggable = ["inspect", "move", "connect"].includes(activeTool);
 
-    if (showRegions) {
-      for (const region of map.regions) {
-        const nId = flowNodeId("region", region.id);
-        flowNodes.push({
-          id: nId,
-          type: nodeTypeForKind("region"),
-          position: flowPosition(region.center, effectiveLayout, region.id),
-          draggable: ["inspect", "move", "connect"].includes(activeTool),
-          selected: (selectedEntity?.type === "region" && selectedEntity.id === region.id) || connectionSourceKey === nId,
-          data: {
-            label: region.name,
-            subtitle: `Region · ${region.kind}`,
-            accent: accentFor("region"),
-            tone: "region",
-            nodeKind: "region",
-            dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
-          },
-        });
-      }
-    }
+    const regionNodes: Node<WorldNodeData>[] = showRegions ? map.regions.map(region => {
+      const nId = flowNodeId("region", region.id);
+      return {
+        id: nId,
+        type: nodeTypeForKind("region"),
+        position: flowPosition(region.center, effectiveLayout, region.id),
+        draggable: isDraggable,
+        selected: (selectedEntity?.type === "region" && selectedEntity.id === region.id) || connectionSourceKey === nId,
+        data: {
+          label: region.name,
+          subtitle: `Region · ${region.kind}`,
+          accent: accentFor("region"),
+          tone: "region",
+          nodeKind: "region",
+          dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
+        },
+      };
+    }) : [];
 
-    for (const site of map.sites) {
+    const siteNodes: Node<WorldNodeData>[] = map.sites.map(site => {
       const nId = flowNodeId("site", site.id);
-      flowNodes.push({
+      return {
         id: nId,
         type: nodeTypeForKind("site"),
         position: flowPosition(site.position, effectiveLayout, site.id),
-        draggable: ["inspect", "move", "connect"].includes(activeTool),
+        draggable: isDraggable,
         selected: (selectedEntity?.type === "site" && selectedEntity.id === site.id) || connectionSourceKey === nId,
         data: {
           label: site.name,
@@ -85,16 +69,16 @@ export function useCanvasNodes({
           nodeKind: "site",
           dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
         },
-      });
-    }
+      };
+    });
 
-    for (const agent of agents) {
+    const agentNodes: Node<WorldNodeData>[] = agents.map(agent => {
       const nId = flowNodeId("agent", agent.id);
-      flowNodes.push({
+      return {
         id: nId,
         type: nodeTypeForKind("agent"),
-        position: flowPosition(agent.position, effectiveLayout ?? layoutPositions, agent.id),
-        draggable: ["inspect", "move", "connect"].includes(activeTool),
+        position: flowPosition(agent.position, effectiveLayout, agent.id),
+        draggable: isDraggable,
         selected: (selectedEntity?.type === "agent" && selectedEntity.id === agent.id) || connectionSourceKey === nId,
         data: {
           label: agent.name,
@@ -104,16 +88,16 @@ export function useCanvasNodes({
           nodeKind: "agent",
           dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
         },
-      });
-    }
+      };
+    });
 
-    for (const node of campaignNodes) {
+    const campaignNodesList: Node<WorldNodeData>[] = campaignNodes.map(node => {
       const nId = flowNodeId("campaignNode", node.id);
-      flowNodes.push({
+      return {
         id: nId,
         type: nodeTypeForKind(node.kind),
-        position: flowPosition(node.position, effectiveLayout ?? layoutPositions, node.id),
-        draggable: ["inspect", "move", "connect"].includes(activeTool),
+        position: flowPosition(node.position, effectiveLayout, node.id),
+        draggable: isDraggable,
         selected: (selectedEntity?.type === "campaignNode" && selectedEntity.id === node.id) || connectionSourceKey === nId,
         data: {
           label: node.name,
@@ -124,31 +108,55 @@ export function useCanvasNodes({
           dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
           status: node.status,
         },
-      });
-    }
+      };
+    });
 
-    if (showFronts) {
-      for (const item of frontNodes) {
-        const nId = flowNodeId("front", item.front.id);
-        flowNodes.push({
-          id: nId,
-          type: nodeTypeForKind("front"),
-          position: item.position,
-          draggable: ["inspect", "move", "connect"].includes(activeTool),
-          selected: (selectedEntity?.type === "front" && selectedEntity.id === item.front.id) || connectionSourceKey === nId,
-          data: {
-            label: item.front.name,
-            subtitle: "Front",
-            accent: accentFor("front"),
-            tone: "front",
-            nodeKind: "front",
-            dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
-            status: item.front.status,
-          },
-        });
-      }
-    }
+    const frontNodesList: Node<WorldNodeData>[] = showFronts ? frontNodes.map(item => {
+      const nId = flowNodeId("front", item.front.id);
+      return {
+        id: nId,
+        type: nodeTypeForKind("front"),
+        position: item.position,
+        draggable: isDraggable,
+        selected: (selectedEntity?.type === "front" && selectedEntity.id === item.front.id) || connectionSourceKey === nId,
+        data: {
+          label: item.front.name,
+          subtitle: "Front",
+          accent: accentFor("front"),
+          tone: "front",
+          nodeKind: "front",
+          dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
+          status: item.front.status,
+        },
+      };
+    }) : [];
 
-    return flowNodes;
+    const tokenNodes: Node<WorldNodeData>[] = map.tokens.map(token => {
+      const nId = flowNodeId("token", token.id);
+      return {
+        id: nId,
+        type: nodeTypeForKind(token.kind),
+        position: flowPosition(token.position, effectiveLayout, token.id),
+        draggable: isDraggable,
+        selected: (selectedEntity?.type === "token" && selectedEntity.id === token.id) || connectionSourceKey === nId,
+        data: {
+          label: token.name,
+          subtitle: `Token · ${token.kind}`,
+          accent: accentFor(token.kind),
+          tone: "token",
+          nodeKind: token.kind,
+          dimmed: hasActiveSpotlight && !connectedNodeIds.has(nId),
+        },
+      };
+    });
+
+    return [
+      ...regionNodes,
+      ...siteNodes,
+      ...agentNodes,
+      ...campaignNodesList,
+      ...frontNodesList,
+      ...tokenNodes,
+    ];
   }, [activeTool, agents, campaignNodes, connectionSourceKey, connectedNodeIds, frontNodes, hasActiveSpotlight, map.regions, map.sites, selectedEntity, showFronts, showRegions, layoutPositions, tieredPositions, flowNodeId, nodeTypeForKind, flowPosition, accentFor]);
 }

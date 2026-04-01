@@ -35,46 +35,40 @@ function resolvePendingDelete(
   worldState: NonNullable<ReturnType<typeof useSimulationStore.getState>["worldState"]>
 ): PendingDelete | null {
   if (!selection) return null;
-  if (selection.type === "agent") {
-    const agent = worldState.agents.find((entry) => entry.id === selection.id);
-    if (!agent) return null;
-    return { type: "agent", id: agent.id, label: agent.name };
+
+  const { type, id } = selection;
+  let label: string | undefined;
+
+  switch (type) {
+    case "agent":
+      label = worldState.agents.find(a => a.id === id)?.name;
+      break;
+    case "campaignNode":
+      label = worldState.campaignNodes.find(n => n.id === id)?.name;
+      break;
+    case "region":
+      label = worldState.map.regions.find(r => r.id === id)?.name;
+      break;
+    case "site":
+      label = worldState.map.sites.find(s => s.id === id)?.name;
+      break;
+    case "route":
+      label = worldState.map.routes.find(r => r.id === id)?.name;
+      break;
+    case "front":
+      label = worldState.fronts.find(f => f.id === id)?.name;
+      break;
+    case "token":
+      label = worldState.map.tokens.find(t => t.id === id)?.name;
+      break;
+    case "boardLink": {
+      const link = worldState.boardLinks.find(l => l.id === id);
+      label = link?.label ?? (link ? `${link.type} link` : undefined);
+      break;
+    }
   }
-  if (selection.type === "campaignNode") {
-    const node = worldState.campaignNodes.find((entry) => entry.id === selection.id);
-    if (!node) return null;
-    return { type: "campaignNode", id: node.id, label: node.name };
-  }
-  if (selection.type === "region") {
-    const region = worldState.map.regions.find((entry) => entry.id === selection.id);
-    if (!region) return null;
-    return { type: "region", id: region.id, label: region.name };
-  }
-  if (selection.type === "site") {
-    const site = worldState.map.sites.find((entry) => entry.id === selection.id);
-    if (!site) return null;
-    return { type: "site", id: site.id, label: site.name };
-  }
-  if (selection.type === "route") {
-    const route = worldState.map.routes.find((entry) => entry.id === selection.id);
-    if (!route) return null;
-    return { type: "route", id: route.id, label: route.name };
-  }
-  if (selection.type === "front") {
-    const front = worldState.fronts.find((entry) => entry.id === selection.id);
-    if (!front) return null;
-    return { type: "front", id: front.id, label: front.name };
-  }
-  if (selection.type === "boardLink") {
-    const link = worldState.boardLinks.find((entry) => entry.id === selection.id);
-    if (!link) return null;
-    return {
-      type: "boardLink",
-      id: link.id,
-      label: link.label ?? `${link.type} link`,
-    };
-  }
-  return null;
+
+  return label ? { type, id, label } : null;
 }
 
 function WorkspaceContent() {
@@ -94,6 +88,7 @@ function WorkspaceContent() {
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoplayArmedRef = useRef(true);
   const syncInFlightRef = useRef(false);
+  const commandQueueRef = useRef<Promise<any>>(Promise.resolve());
   const worldCanvasRef = useRef<WorldCanvasHandle | null>(null);
 
   const [showInjectModal, setShowInjectModal] = useState(false);
@@ -307,54 +302,77 @@ function WorkspaceContent() {
 
   const executeCommand = useCallback(
     async (payload: Record<string, unknown>) => {
-      const currentBranchId = useSimulationStore.getState().branchId;
-      const currentTick = useSimulationStore.getState().worldState?.tick ?? 0;
-      if (!currentBranchId) return null;
+      return new Promise<any>((resolve, reject) => {
+        commandQueueRef.current = commandQueueRef.current.then(async () => {
+          try {
+            const state = useSimulationStore.getState();
+            const currentBranchId = state.branchId;
+            const currentTick = state.worldState?.tick ?? 0;
+            if (!currentBranchId) {
+              resolve(null);
+              return;
+            }
 
-      const response = await fetch("/api/sim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: currentBranchId,
-          currentTick,
-          ...payload,
-        }),
+            const response = await fetch("/api/sim", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                branchId: currentBranchId,
+                currentTick,
+                ...payload,
+              }),
+            });
+
+            const text = await response.text();
+            let data;
+            try {
+              data = JSON.parse(text);
+            } catch (e) {
+              console.error("Failed to parse API response as JSON:", text);
+              if (!response.ok) {
+                const err = new Error(`Server returned ${response.status}: ${text.slice(0, 100)}...`);
+                reject(err);
+                return;
+              }
+              const err = new Error("Invalid server response format.");
+              reject(err);
+              return;
+            }
+
+            if (response.status === 409) {
+              alert(data.error);
+              resolve(null);
+              return;
+            }
+            if (!response.ok) {
+              const err = new Error(data.error || "Simulation command failed.");
+              reject(err);
+              return;
+            }
+
+            if (data.delta) applyDelta(data.delta);
+            if (data.worldState) setWorldState(data.worldState);
+            if (data.events) addEvents(data.events);
+            if (data.proposals) setLastProposals(data.proposals);
+            if (data.branch) upsertBranch(data.branch);
+
+            resolve(data);
+          } catch (error) {
+            console.error(error);
+            reject(error);
+          }
+        });
       });
-
-      const data = await response.json();
-      if (response.status === 409) {
-        alert(data.error);
-        return null;
-      }
-      if (!response.ok) {
-        throw new Error(data.error || "Simulation command failed.");
-      }
-
-      if (data.delta) {
-        applyDelta(data.delta);
-      }
-      if (data.worldState) {
-        setWorldState(data.worldState);
-      }
-      if (data.events) {
-        addEvents(data.events);
-      }
-      if (data.proposals) {
-        setLastProposals(data.proposals);
-      }
-      if (data.branch) {
-        upsertBranch(data.branch);
-      }
-
-      return data;
     },
     [addEvents, applyDelta, setLastProposals, setWorldState, upsertBranch]
   );
 
   const executeTick = useCallback(async () => {
+    if (syncInFlightRef.current) return;
     const state = useSimulationStore.getState();
     if (!state.branchId) return;
 
+    syncInFlightRef.current = true;
     setStatus("stepping");
     try {
       const response = await fetch("/api/sim", {
@@ -368,25 +386,32 @@ function WorkspaceContent() {
         }),
       });
 
-      const data = await response.json();
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        console.error("Failed to parse API response as JSON:", text);
+        if (!response.ok) throw new Error(`Server returned ${response.status}: ${text.slice(0, 100)}...`);
+        throw new Error("Invalid server response format.");
+      }
+
       if (response.status === 409) {
         alert(data.error);
         setStatus("error");
         return;
       }
 
-      if (data.delta) {
-        applyDelta(data.delta);
-      }
-      if (data.worldState) {
-        setWorldState(data.worldState);
-      }
+      if (data.delta) applyDelta(data.delta);
+      if (data.worldState) setWorldState(data.worldState);
       addEvents(data.events ?? []);
       setLastProposals(data.proposals ?? []);
       setStatus("idle");
     } catch (error) {
       console.error("Tick failed:", error);
       setStatus("error");
+    } finally {
+      syncInFlightRef.current = false;
     }
   }, [addEvents, applyDelta, setLastProposals, setStatus, setWorldState]);
 
@@ -700,6 +725,9 @@ function WorkspaceContent() {
         case "boardLink":
           await executeCommand({ type: "deleteBoardLink", linkId: pendingDelete.id });
           break;
+        case "token":
+          await executeCommand({ type: "deleteToken", tokenId: pendingDelete.id });
+          break;
       }
       setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
     } catch (error) {
@@ -939,7 +967,7 @@ function WorkspaceContent() {
         />
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 border-r border-[var(--border-subtle)] pr-3 mr-1">
+          <div className="flex items-center gap-1.5 border-r border-(--border-subtle) pr-3 mr-1">
             <label
               htmlFor="branch-select"
               className="text-[10px] font-semibold uppercase tracking-[0.16em] text-(--text-muted)"
@@ -1159,14 +1187,14 @@ function WorkspaceContent() {
       />
 
       {pendingDelete ? (
-        <div className="absolute bottom-[calc(var(--workspace-panel-pad)+16px)] left-1/2 z-30 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-panel)]/96 p-4 shadow-[0_22px_56px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+        <div className="absolute bottom-[calc(var(--workspace-panel-pad)+16px)] left-1/2 z-30 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-(--border-strong) bg-(--bg-panel)/96 p-4 shadow-[0_22px_56px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-(--text-muted)">
                 Confirm Removal
               </div>
-              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                Remove <span className="font-semibold text-[var(--text-primary)]">{pendingDelete.label}</span> from the campaign board?
+              <p className="mt-2 text-sm leading-6 text-(--text-secondary)">
+                Remove <span className="font-semibold text-(--text-primary)">{pendingDelete.label}</span> from the campaign board?
               </p>
             </div>
             <Badge variant="warning">

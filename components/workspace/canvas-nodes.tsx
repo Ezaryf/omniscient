@@ -5,7 +5,7 @@ export type WorldNodeData = {
   label: string;
   subtitle: string;
   accent: string;
-  tone: "agent" | "campaignNode" | "region" | "site" | "front";
+  tone: "agent" | "campaignNode" | "region" | "site" | "front" | "token";
   nodeKind?: string;
   dimmed?: boolean;
   status?: string;

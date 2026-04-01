@@ -21,6 +21,7 @@ import {
 } from "@xyflow/react";
 import {
   Castle,
+  CircleDot,
   Crosshair,
   FlagTriangleRight,
   Hand,
@@ -67,12 +68,15 @@ interface ReactFlowWorldCanvasProps {
   readonly fronts: FrontClock[];
   readonly selectedEntity: BoardSelection | null;
   readonly onSelectEntity: (selection: BoardSelection | null) => void;
+  readonly onMoveToken: (tokenId: string, patch: { x: number; y: number; regionId?: string | null; siteId?: string | null }) => Promise<void>;
   readonly onMoveSite: (siteId: string, patch: { x: number; y: number; regionId?: string | null }) => Promise<void>;
   readonly onMoveRegion: (regionId: string, patch: { x: number; y: number }) => Promise<void>;
+  readonly onResizeRegion: (regionId: string, radius: number) => Promise<void>;
   readonly onMoveAgent: (agentId: string, patch: { x: number; y: number }) => Promise<void>;
   readonly onMoveCampaignNode: (nodeId: string, patch: { x?: number; y?: number; radius?: number }) => Promise<void>;
   readonly onCreateRegion: (payload: { name: string; kind: "frontier" | "homeland" | "wilds" | "city-state" | "sea"; x: number; y: number; radius?: number }) => Promise<void>;
   readonly onCreateSite: (payload: { name: string; kind: "waypoint" | "capital" | "stronghold" | "market" | "ruin" | "sanctum"; x: number; y: number; regionId?: string | null }) => Promise<void>;
+  readonly onCreateToken: (payload: { name: string; kind: "party" | "faction" | "threat"; x: number; y: number; regionId?: string | null; siteId?: string | null }) => Promise<void>;
   readonly onCreateRoute: (payload: { name: string; fromSiteId: string; toSiteId: string }) => Promise<void>;
   readonly onCreateBoardLink: (payload: {
     linkType: BoardLinkType;
@@ -126,7 +130,7 @@ function findNearestSite(map: MapLayer, pos: Position) {
   return best;
 }
 
-function flowPosition(position: Position, layoutPositions?: Map<string, { x: number; y: number }>, nodeId?: string) {
+function flowPosition(position: Position, layoutPositions?: Map<string, { x: number; y: number }> | null, nodeId?: string) {
   if (nodeId && layoutPositions?.has(nodeId)) {
     const layoutPos = layoutPositions.get(nodeId)!;
     return { x: layoutPos.x, y: layoutPos.y };
@@ -152,6 +156,7 @@ const ADD_TOOL_CONFIG: Array<{ tool: Exclude<BoardTool, "inspect" | "move" | "co
   { tool: "place", label: "Place", icon: Castle },
   { tool: "region", label: "Region", icon: Waypoints },
   { tool: "site", label: "Site", icon: MapPinned },
+  { tool: "token", label: "Token", icon: CircleDot },
 ];
 
 const EDGE_TONE: Record<string, { stroke: string; glow: string }> = {
@@ -321,12 +326,15 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
     fronts,
     selectedEntity,
     onSelectEntity,
+    onMoveToken,
     onMoveSite,
     onMoveRegion,
+    onResizeRegion,
     onMoveAgent,
     onMoveCampaignNode,
     onCreateRegion,
     onCreateSite,
+    onCreateToken,
     onCreateRoute,
     onCreateBoardLink,
     onCreateCampaignNode,
@@ -455,14 +463,27 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
     else if (tool === "delete") { setDeleteMode(true); setAddMode("none"); setConnectionSourceKey(null); }
     else if (tool === "connect") { setConnectionSourceKey(CONNECT_ARMED); setAddMode("none"); setDeleteMode(false); }
     else { setAddMode(tool as AddMode); setDeleteMode(false); setConnectionSourceKey(null); }
-    onToolStateChange?.({ tool, labelDensity: "balanced" });
-  }, [onToolStateChange]);
+    onToolStateChange?.({
+      activeTool: tool,
+      linkType,
+      zoomPercent,
+      showGrid: true,
+      showRelationships: true,
+      showFronts: true,
+      showRegions: true,
+      snapToGrid: true,
+      labelDensity: "balanced",
+      canDeleteSelection: !!selectedEntity,
+      canStartLinkFromSelection: !!selectedEntity,
+    });
+  }, [onToolStateChange, linkType, zoomPercent, selectedEntity]);
 
   const fitToContent = useCallback(() => reactFlowRef.current?.fitView({ padding: 0.22, duration: 800 }), []);
   const resetCamera = useCallback(() => reactFlowRef.current?.setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 800 }), []);
 
   const onNodeClick: NodeMouseHandler = useCallback((_, node) => {
-    if (activeTool === "delete") { onRequestDeleteSelection({ type: node.data.tone, id: node.id.split(":")[1] }); return; }
+    const nodeTone = node.data.tone as BoardSelection["type"];
+    if (activeTool === "delete") { onRequestDeleteSelection({ type: nodeTone, id: node.id.split(":")[1] }); return; }
     if (activeTool === "connect") {
       const parts = node.id.split(":");
       const sel: ConnectableSelection = { type: parts[0] as any, id: parts[1] };
@@ -474,42 +495,72 @@ export const ReactFlowWorldCanvas = forwardRef<WorldCanvasHandle, ReactFlowWorld
       }
       return;
     }
-    onSelectEntity({ type: node.data.tone, id: node.id.split(":")[1] });
+    onSelectEntity({ type: nodeTone, id: node.id.split(":")[1] });
   }, [activeTool, connectionSourceKey, linkType, onSelectEntity, onCreateBoardLink, onRequestDeleteSelection]);
 
   const onPaneClick = useCallback((e: React.MouseEvent) => {
     if (addMode !== "none") {
       const pos = reactFlowRef.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY }) ?? { x: 0, y: 0 };
-      if (addMode === "region") onCreateRegion({ name: "New Region", kind: "frontier", ...pos });
-      else if (addMode === "site") onCreateSite({ name: "New Site", kind: "waypoint", ...pos });
-      else if (addMode === "agent") onCreateCampaignNode({ name: "New Actor", kind: "agent", ...pos });
-      else if (addMode === "faction") onCreateCampaignNode({ name: "New Faction", kind: "faction", ...pos });
-      else if (addMode === "front") onCreateCampaignNode({ name: "New Front", kind: "front", ...pos });
-      else if (addMode === "event") onCreateCampaignNode({ name: "New Event", kind: "event", ...pos });
-      else if (addMode === "place") onCreateCampaignNode({ name: "New Place", kind: "place", ...pos });
+      if (addMode === "region") {
+        onCreateRegion({ name: "New Region", kind: "frontier", ...pos });
+      } else if (addMode === "site") {
+        const nr = findNearestRegion(map, pos);
+        onCreateSite({ name: "New Site", kind: "waypoint", ...pos, regionId: nr?.id ?? null });
+      } else if (addMode === "token") {
+        const nr = findNearestRegion(map, pos);
+        const ns = findNearestSite(map, pos);
+        onCreateToken({ name: "New Token", kind: "party", ...pos, regionId: nr?.id ?? null, siteId: ns?.id ?? null });
+      } else if (["agent", "faction", "front", "event", "place"].includes(addMode)) {
+        onCreateCampaignNode({ name: `New ${addMode}`, kind: addMode as any, ...pos });
+      }
       setAddMode("none");
     } else { onSelectEntity(null); setConnectionSourceKey(null); }
-  }, [addMode, onCreateRegion, onCreateSite, onCreateCampaignNode, onSelectEntity]);
+  }, [addMode, map, onCreateRegion, onCreateSite, onCreateToken, onCreateCampaignNode, onSelectEntity]);
 
   const onNodeDragStop: OnNodeDrag = useCallback((_, node) => {
     const [type, id] = node.id.split(":");
     const pos = node.position;
-    if (type === "agent") onMoveAgent(id, pos);
-    else if (type === "campaignNode") onMoveCampaignNode(id, pos);
-    else if (type === "region") onMoveRegion(id, pos);
-    else if (type === "site") onMoveSite(id, pos);
-  }, [onMoveAgent, onMoveCampaignNode, onMoveRegion, onMoveSite]);
+    if (type === "agent") {
+      onMoveAgent(id, pos);
+    } else if (type === "campaignNode") {
+      onMoveCampaignNode(id, pos);
+    } else if (type === "region") {
+      onMoveRegion(id, pos);
+    } else if (type === "site") {
+      const nr = findNearestRegion(map, pos);
+      onMoveSite(id, { ...pos, regionId: nr?.id ?? null });
+    } else if (type === "token") {
+      const nr = findNearestRegion(map, pos);
+      const ns = findNearestSite(map, pos);
+      onMoveToken(id, { ...pos, regionId: nr?.id ?? null, siteId: ns?.id ?? null });
+    }
+  }, [map, onMoveAgent, onMoveCampaignNode, onMoveRegion, onMoveSite, onMoveToken]);
 
   const onEdgeClick: EdgeMouseHandler = useCallback((_, edge) => {
     const parts = edge.id.split(":");
-    onSelectEntity({ type: parts[0] as any, id: parts[1] });
+    onSelectEntity({ type: parts[0] as BoardSelection["type"], id: parts[1] });
   }, [onSelectEntity]);
 
   useImperativeHandle(ref, () => ({
-    zoomIn: () => reactFlowRef.current?.zoomIn(),
-    zoomOut: () => reactFlowRef.current?.zoomOut(),
-    fitView: fitToContent,
-  }), [fitToContent]);
+    focusSelection: () => {
+      if (!selectedEntity) return;
+      const id = selectionToFlowId(selectedEntity);
+      const node = reactFlowRef.current?.getNodes().find(n => n.id === id);
+      if (node) reactFlowRef.current?.setCenter(node.position.x, node.position.y, { zoom: 1.2, duration: 800 });
+    },
+    beginLinkFromSelection: () => {
+      if (selectedEntity && ["agent", "campaignNode", "region", "site", "front"].includes(selectedEntity.type)) {
+        setConnectionSourceKey(flowNodeId(selectedEntity.type, (selectedEntity as any).id));
+      }
+    },
+    clearSelection: () => {
+      onSelectEntity(null);
+      setConnectionSourceKey(null);
+    },
+    fitToContent,
+    resetCamera,
+    setBoardTool,
+  }), [selectedEntity, onSelectEntity, fitToContent, resetCamera, setBoardTool]);
 
   const showConnectionHint = connectionSourceKey && connectionSourceKey !== CONNECT_ARMED;
 
