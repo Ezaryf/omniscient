@@ -569,7 +569,11 @@ function normalizeMap(map: MapLayer | undefined, agents: Agent[]): MapLayer {
 }
 
 export function ensureWorldState(state: Partial<WorldState>): WorldState {
-  const agents = state.agents ?? [];
+  const agents = (state.agents ?? []).map((agent) => ({
+    ...agent,
+    memory: agent.memory ?? [],
+    intentHistory: agent.intentHistory ?? [],
+  }));
   const relationships = state.relationships ?? [];
   const map = normalizeMap(state.map, agents);
   const campaignNodes = (state.campaignNodes ?? []).map((node) => ({
