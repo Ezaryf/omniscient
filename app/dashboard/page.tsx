@@ -16,7 +16,7 @@ export default async function DashboardPage() {
   if (session?.user?.id) {
     try {
       const store = getStore();
-      projects = await store.listProjects();
+      projects = await store.listProjects(session.user.id);
     } catch (err) {
       console.error("Failed to load projects:", err);
     }

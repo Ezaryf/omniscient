@@ -11,7 +11,7 @@ export default async function HomePage() {
   if (session?.user?.id) {
     try {
       const store = getStore();
-      const projects = await store.listProjects();
+      const projects = await store.listProjects(session.user.id);
       projectCount = projects.length;
     } catch (err) {
       console.error("Failed to load projects:", err);

@@ -258,10 +258,9 @@
     display: grid;
     grid-template-areas:
       "header"
-      "control"
       "main"
       "timeline";
-    grid-template-rows: auto auto minmax(0, 1fr) var(--workspace-timeline-height);
+    grid-template-rows: auto minmax(0, 1fr) var(--workspace-timeline-height);
     grid-template-columns: minmax(0, 1fr);
     height: 100vh;
     width: 100vw;
@@ -309,22 +308,23 @@
     min-height: 0;
     padding: var(--workspace-panel-pad);
     padding-bottom: 0;
+    isolation: isolate;
   }
 
-  .workspace-control {
-    grid-area: control;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-dock);
-  }
+
 
   .workspace-panel {
+    position: relative;
+    z-index: 50; /* Sidebars are the top-level HUD layer */
     min-width: 0;
     min-height: 0;
     overflow: hidden;
     border-radius: var(--workspace-radius);
+    pointer-events: auto; /* Ensure sidebars catch clicks */
   }
 
   .workspace-panel-center {
+    z-index: 1; /* Canvas is the lowest layer with its own stacking context */
     position: relative;
     min-width: 0;
     border: 1px solid var(--border-subtle);
@@ -390,7 +390,7 @@
 
   @media (max-width: 960px) {
     .workspace-shell {
-      grid-template-rows: auto auto minmax(0, 1fr) minmax(220px, 32vh);
+      grid-template-rows: auto minmax(0, 1fr) minmax(220px, 32vh);
     }
 
     .workspace-main {
@@ -401,4 +401,60 @@
       display: none;
     }
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Graph Node Animations
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* Scale-in animation for new nodes */
+.graph-node-enter {
+  animation: graphNodeEnter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes graphNodeEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Pulse animation for critical fronts */
+.graph-pulse {
+  animation: graphPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes graphPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35) inset,
+                0 0 12px rgba(245, 158, 11, 0.08),
+                0 8px 20px rgba(0, 0, 0, 0.24);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.6) inset,
+                0 0 24px rgba(245, 158, 11, 0.18),
+                0 12px 28px rgba(0, 0, 0, 0.32);
+  }
+}
+
+/* Smoothstep edge styling overrides */
+.react-flow__edge-smoothstep .react-flow__edge-path {
+  transition: stroke-opacity 0.2s ease, stroke-width 0.15s ease;
+}
+
+/* Edge label styling */
+.react-flow__edge-label {
+  font-size: 10px !important;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: rgba(10, 14, 20, 0.92) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px !important;
+  padding: 2px 6px !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(8px);
 }

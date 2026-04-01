@@ -6,7 +6,7 @@ try {
   console.log("Store initialized.");
   
   console.log("Listing projects...");
-  const projects = await store.listProjects();
+  const projects = await store.listProjects("user-demo");
   console.log("Projects:", projects.length);
   
   if (projects.length > 0) {
