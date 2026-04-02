@@ -11,11 +11,3 @@ tsconfig.tsbuildinfo
 .bun-cache/
 package-lock.json
 tsc_output.txt
-.agents/
-skills-lock.json
-.next-dev.err.log
-.next-dev.out.log
-.next-start.err.log
-.next-start.out.log
-.tmp-*.log
-tmp_test_out.txt
