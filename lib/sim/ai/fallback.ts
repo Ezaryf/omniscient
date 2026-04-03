@@ -25,6 +25,7 @@ export function generateFallbackProposal(
     relationships,
     campaignNodes: [],
     boardLinks: [],
+    boardGroups: [],
     map: { id: "map", name: "Campaign Map", regions: [], sites: [], routes: [], tokens: [] },
     fronts: [],
     projections: [],

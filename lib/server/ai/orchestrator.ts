@@ -14,7 +14,7 @@ import { generateFallbackProposal } from "@/lib/sim/ai/fallback";
 import { AICache } from "./cache";
 import { CampaignSetupDraftSchema } from "@/lib/sim/types";
 import { buildFallbackCampaignSetupDraft } from "@/lib/sim/setup";
-import { buildActionPrompt, buildExplanationPrompt, buildNarrativePrompt, buildGroupActionPrompt, buildSimulationDescriptionPrompt, buildCampaignSetupPrompt } from "./prompts";
+import { buildActionPrompt, buildExplanationPrompt, buildNarrativePrompt, buildGroupActionPrompt, buildSimulationDescriptionPrompt, buildCampaignSetupPrompt, buildActorDescriptionPrompt } from "./prompts";
 import { createRng } from "@/lib/sim/seed";
 import { getStore } from "../store";
 
@@ -364,9 +364,32 @@ export async function generateCampaignSetup(
     const validation = CampaignSetupDraftSchema.safeParse(parsed);
 
     if (validation.success) {
-      return {
+      const draft = {
         ...validation.data,
-        generatedBy: "ai",
+        generatedBy: "ai" as const,
+      };
+
+      // Generate descriptions for each actor
+      console.log(`[AI] Generating descriptions for ${draft.actors.length} actors...`);
+      const actorsWithDescriptions = await Promise.all(
+        draft.actors.map(async (actor) => {
+          try {
+            const descPrompt = buildActorDescriptionPrompt(actor.name, actor.type, actor.role);
+            const descRaw = await callAIText(descPrompt, normalizedConfig);
+            const description = descRaw.trim();
+            console.log(`[AI] Generated description for ${actor.name}: ${description.substring(0, 50)}...`);
+            return { ...actor, description };
+          } catch (error) {
+            console.error(`[AI] Failed to generate description for actor ${actor.name}:`, error);
+            return { ...actor, description: "" };
+          }
+        })
+      );
+
+      console.log(`[AI] Successfully generated ${actorsWithDescriptions.filter(a => a.description).length} descriptions`);
+      return {
+        ...draft,
+        actors: actorsWithDescriptions,
       };
     }
   } catch (error) {
@@ -379,17 +402,29 @@ export async function generateCampaignSetup(
 // ─── Helpers ─────────────────────────────────────────────────────
 
 async function callAI(prompt: string, config: AIConfig): Promise<string> {
+  return callAIWithMode(prompt, config, "json");
+}
+
+async function callAIText(prompt: string, config: AIConfig): Promise<string> {
+  return callAIWithMode(prompt, config, "text");
+}
+
+async function callAIWithMode(prompt: string, config: AIConfig, mode: "json" | "text"): Promise<string> {
   let baseUrl = config.baseUrl;
   let headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   let endpoint = "/chat/completions";
+  const systemMessage = mode === "json" 
+    ? "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON."
+    : "You are a helpful assistant that provides clear, concise responses.";
+  
   let body: Record<string, unknown> = {
     model: config.model,
     messages: [
       {
         role: "system",
-        content: "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON.",
+        content: systemMessage,
       },
       { role: "user", content: prompt },
     ],
@@ -422,7 +457,7 @@ async function callAI(prompt: string, config: AIConfig): Promise<string> {
         body = {
           model: config.model,
           max_tokens: 800,
-          system: "You are a simulation engine that outputs only valid JSON. No markdown, no explanation, just JSON.",
+          system: systemMessage,
           messages: [{ role: "user", content: prompt }],
         };
       }

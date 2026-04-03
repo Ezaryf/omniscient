@@ -39,6 +39,9 @@ export function buildActionPrompt(
 - Influence: ${agent.state.influence.toFixed(0)}
 - Wealth: ${agent.state.wealth.toFixed(0)}
 
+## Character Description
+${(agent as any).description || `${agent.name} is a ${agent.type} agent. No additional background provided.`}
+
 ## Traits
 - Aggression: ${agent.traits.aggression}
 - Diplomacy: ${agent.traits.diplomacy}
@@ -194,9 +197,11 @@ export function buildGroupActionPrompt(
 ): string {
   const agentDetails = agents.map(agent => {
     const rels = worldState.relationships.filter(r => r.sourceAgentId === agent.id || r.targetAgentId === agent.id);
+    const description = (agent as any).description;
     return `
 ### Agent: ${agent.name} (ID: ${agent.id})
 - Type: ${agent.type}
+${description ? `- Background: ${description}` : ""}
 - Stats: health=${agent.state.health.toFixed(2)}, morale=${agent.state.morale.toFixed(2)}, wealth=${agent.state.wealth.toFixed(0)}
 - Traits: aggression=${agent.traits.aggression}, diplomacy=${agent.traits.diplomacy}
 - Goals: ${agent.goals.filter(g => g.status === "active").map(g => g.label).join(", ")}
@@ -316,4 +321,21 @@ Respond with ONLY valid JSON:
     "stakes": "<what the GM should prep next>"
   }
 }`;
+}
+
+export function buildActorDescriptionPrompt(name: string, type: string, role: string): string {
+  return `You are a world-building assistant for a geopolitical simulation game.
+
+Generate a concise character description for a simulation actor named "${name}" with type "${type}" and role "${role}".
+
+Cover:
+1. Who they are (real-world or fictional archetype — use real knowledge if the name is recognizable)
+2. Their core motivation and primary goal
+3. Behavioral tendencies (aggressive, diplomatic, opportunistic, ideological, etc.)
+4. Typical methods and style of action
+5. Key allegiances or rivalries they'd likely have
+
+Under 120 words. Present tense. Be specific — if the name is recognizable (e.g. "Elon Musk", "Napoleon", "The Vatican", "NATO"), use real knowledge. If fictional, invent a coherent personality.
+
+Respond with ONLY the description text, no labels, no JSON, no preamble.`;
 }
