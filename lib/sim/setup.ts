@@ -150,6 +150,7 @@ export function buildFallbackCampaignSetupDraft(title: string, description = "")
         factionId: faction.id,
         role: "Commanding figure",
         goal: faction.goal,
+        description: "",
       },
       {
         id: `actor-${slugify(faction.name)}-voice`,
@@ -158,6 +159,7 @@ export function buildFallbackCampaignSetupDraft(title: string, description = "")
         factionId: faction.id,
         role: "Pressure point and political instrument",
         goal: `Keep ${faction.name} ahead of the fallout spreading across the campaign map.`,
+        description: "",
       },
     ];
   }).slice(0, 6);
@@ -411,6 +413,7 @@ export function materializeCampaignSetupDraft(
       id: actor.id,
       name: actor.name,
       type: actor.type,
+      description: actor.description || actor.role || "",
       factionId: actor.factionId,
       goals: [
         { id: `goal-${actor.id}`, label: actor.goal, priority: 0.86, progress: 0.12, status: "active" as const },

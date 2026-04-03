@@ -128,7 +128,6 @@ export const BoardSelectionTypeSchema = z.enum([
   "route",
   "front",
   "boardLink",
-  "token",
 ]);
 export type BoardSelectionType = z.infer<typeof BoardSelectionTypeSchema>;
 

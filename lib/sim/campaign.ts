@@ -311,6 +311,7 @@ export function deriveCampaignNodes(
       id: `node-${agent.factionId}`,
       kind: "faction",
       name: factionLabel(agent.factionId),
+      description: "",
       factionId: agent.factionId,
       regionId: findRegionForAgent(state.map, agent)?.id ?? null,
       siteId: null,
@@ -328,6 +329,7 @@ export function deriveCampaignNodes(
     id: `node-${region.id}`,
     kind: "region",
     name: region.name,
+    description: "",
     factionId: region.controllingFactionId,
     regionId: region.id,
     siteId: null,
@@ -345,6 +347,7 @@ export function deriveCampaignNodes(
     id: `node-${site.id}`,
     kind: "site",
     name: site.name,
+    description: "",
     factionId: site.controllingFactionId,
     regionId: site.regionId,
     siteId: site.id,
@@ -361,6 +364,7 @@ export function deriveCampaignNodes(
       id: `node-${route.id}`,
       kind: "route",
       name: route.name,
+      description: "",
       factionId: route.controllingFactionId,
       regionId: from?.regionId ?? to?.regionId ?? null,
       siteId: null,
@@ -384,6 +388,7 @@ export function deriveCampaignNodes(
       id: `node-${token.id}`,
       kind: "party",
       name: token.name,
+      description: "",
       factionId: token.factionId,
       regionId: token.regionId,
       siteId: token.siteId,
@@ -397,6 +402,7 @@ export function deriveCampaignNodes(
     id: `node-${agent.id}`,
     kind: "agent",
     name: agent.name,
+    description: "",
     factionId: agent.factionId,
     regionId: findRegionForAgent(state.map, agent)?.id ?? null,
     siteId: findSiteForPosition(state.map, agent.position)?.id ?? null,
@@ -569,11 +575,7 @@ function normalizeMap(map: MapLayer | undefined, agents: Agent[]): MapLayer {
 }
 
 export function ensureWorldState(state: Partial<WorldState>): WorldState {
-  const agents = (state.agents ?? []).map((agent) => ({
-    ...agent,
-    memory: agent.memory ?? [],
-    intentHistory: agent.intentHistory ?? [],
-  }));
+  const agents = state.agents ?? [];
   const relationships = state.relationships ?? [];
   const map = normalizeMap(state.map, agents);
   const campaignNodes = (state.campaignNodes ?? []).map((node) => ({
@@ -627,6 +629,7 @@ export function ensureWorldState(state: Partial<WorldState>): WorldState {
     relationships,
     campaignNodes,
     boardLinks,
+    boardGroups: state.boardGroups ?? [],
     map,
     fronts,
     projections: state.projections ?? [],
