@@ -40,6 +40,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 150, y: 200 },
     status: "alive",
+    description: "",
   },
   {
     id: "agent-2",
@@ -58,6 +59,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 500, y: 150 },
     status: "alive",
+    description: "",
   },
   {
     id: "agent-3",
@@ -76,6 +78,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 350, y: 400 },
     status: "alive",
+    description: "",
   },
   {
     id: "agent-4",
@@ -94,6 +97,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 250, y: 100 },
     status: "alive",
+    description: "",
   },
   {
     id: "agent-5",
@@ -112,6 +116,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 600, y: 350 },
     status: "alive",
+    description: "",
   },
   {
     id: "agent-6",
@@ -130,6 +135,7 @@ const DEMO_AGENTS: Agent[] = [
     intentHistory: [],
     position: { x: 400, y: 250 },
     status: "alive",
+    description: "",
   },
 ];
 
@@ -176,8 +182,11 @@ export class InMemoryStore implements SimulationStore {
   ledger = new Map<string, any>(); // Key: branchId:tick
 
   async getProject(id: string) { return this.projects.get(id) || null; }
-  async listProjects(userId: string) { 
-    return Array.from(this.projects.values()).filter(p => p.ownerId === userId || p.ownerId === "user-demo"); 
+  async listProjects(_userId: string) { 
+    // In-memory store usually returns all for the demo user
+    return Array.from(this.projects.values()).filter(p => 
+      p.ownerId === _userId || _userId === "user-demo" || _userId === "dev-user-id"
+    ); 
   }
   async saveProject(p: ProjectRecord) { this.projects.set(p.id, p); }
   async deleteProject(id: string) {
@@ -413,14 +422,14 @@ const globalForStore = globalThis as unknown as {
 
 export function getStore(): SimulationStore {
   if (!globalForStore.__omniscientStore) {
-    const useInMemory = process.env.USE_IN_MEMORY_STORE === "true" || !process.env.DATABASE_URL;
+    const useInMemory = process.env.USE_IN_MEMORY_STORE === "true";
 
     // Prioritize in-memory store if requested, otherwise check for DATABASE_URL
     if (!useInMemory && process.env.DATABASE_URL) {
       console.log("Using PrismaStore (Database Persistence Enabled)");
       globalForStore.__omniscientStore = new PrismaStore();
     } else {
-      console.log(`Using InMemoryStore (Ephemeral Storage${useInMemory && process.env.USE_IN_MEMORY_STORE === "true" ? " - Forced" : ""})`);
+      console.log(`Using InMemoryStore (Ephemeral Storage${useInMemory ? " - Forced" : ""})`);
       globalForStore.__omniscientStore = createDemoStore();
     }
   }

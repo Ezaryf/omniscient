@@ -3,7 +3,6 @@ import type {
   ActionProposal,
   Agent,
   BoardSelection,
-  BoardLink,
   CampaignSetupDraft,
   CausalEventType,
   SimEvent,
@@ -11,18 +10,8 @@ import type {
   WorldState,
 } from "@/lib/sim/types";
 import type { StateDelta } from "@/lib/sim/diff";
-import { BattleEngine, type BattleSnapshot, type BattleEvent, type BattleConfig } from "@/lib/sim/battle";
-import { adaptBoardToBattle } from "@/lib/sim/adapters/board-to-battle";
-import type { NarrativeStyle } from "@/lib/sim/battle/narrative/templates";
-import type { LayoutMode } from "@/lib/layout/types";
 
 export type SimStatus = "idle" | "playing" | "paused" | "stepping" | "loading" | "error";
-
-export type SimulationMode = "generic" | "battle";
-
-export type NarrativeStyleSetting = NarrativeStyle;
-
-export type LayoutPositions = Map<string, { x: number; y: number }>;
 
 export interface AiSettings {
   provider: "openai" | "anthropic" | "gemini" | "groq" | "ollama";
@@ -106,20 +95,6 @@ interface SimulationState {
   isNewSimulation: boolean;
   setupStatus: "drafting" | "ready" | "applied" | "dismissed";
   setupDraft: CampaignSetupDraft | null;
-  
-  simulationMode: SimulationMode;
-  battleFrames: BattleSnapshot[];
-  battleEvents: BattleEvent[];
-  battleCurrentFrame: number;
-  battleWarnings: string[];
-  battleNarrative: string;
-  battleNarrativeExpanded: boolean;
-  narrativeStyle: NarrativeStyleSetting;
-  llmEnhanceEnabled: boolean;
-  layoutMode: LayoutMode;
-  layoutPositions: LayoutPositions;
-  setLayoutPositions: (positions: LayoutPositions) => void;
-  
   setAiSettings: (settings: Partial<AiSettings>) => void;
   setWorkspaceSettings: (settings: Partial<WorkspaceSettings>) => void;
   updateDockLayout: (layout: Partial<WorkspaceDockLayout>) => void;
@@ -133,8 +108,6 @@ interface SimulationState {
   setSelectedEntity: (selection: BoardSelection | null) => void;
   setStatus: (status: SimStatus) => void;
   setTickSpeed: (speed: number) => void;
-  setLayoutMode: (mode: LayoutMode) => void;
-  applyAutoLayout: () => void;
   addEvents: (events: SimEvent[]) => void;
   setLastProposals: (proposals: ActionProposal[]) => void;
   setProjections: (projections: any[]) => void;
@@ -142,23 +115,10 @@ interface SimulationState {
   setIsNewSimulation: (isNewSimulation: boolean) => void;
   setSetupStatus: (status: SimulationState["setupStatus"]) => void;
   setSetupDraft: (draft: CampaignSetupDraft | null) => void;
-  setNarrativeStyle: (style: NarrativeStyleSetting) => void;
-  setLlmEnhanceEnabled: (enabled: boolean) => void;
-  setBattleNarrativeExpanded: (expanded: boolean) => void;
-  updateBattleNarrative: (narrative: string) => void;
-  setSimulationMode: (mode: SimulationMode) => void;
-  runBattleSimulation: (config?: Partial<BattleConfig>) => void;
-  setBattleFrame: (frameIndex: number) => void;
-  nextBattleFrame: () => void;
-  prevBattleFrame: () => void;
-  resetBattleSimulation: () => void;
   sync: () => Promise<void>;
   currentTick: () => number;
   aliveAgentCount: () => number;
-  clearBranchState: () => void;
 }
-
-const MAX_EVENTS = 500;
 
 function isBlankWorldState(state: WorldState | null) {
   if (!state) return true;
@@ -291,17 +251,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   setupDraft: null,
   aiSettings: getInitialAiSettings(),
   workspaceSettings: getInitialWorkspaceSettings(),
-  simulationMode: "generic",
-  battleFrames: [],
-  battleEvents: [],
-  battleCurrentFrame: 0,
-  battleWarnings: [],
-  battleNarrative: "",
-  battleNarrativeExpanded: false,
-  narrativeStyle: "cinematic",
-  llmEnhanceEnabled: false,
-  layoutMode: "manual",
-  layoutPositions: new Map(),
 
   setAiSettings: (settings) =>
     set((previous) => {
@@ -380,7 +329,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         return updated ?? relationship;
       });
 
-      const nextEvents = [...previous.worldState.events, ...delta.newEvents].slice(-MAX_EVENTS);
+      const nextEvents = [...previous.worldState.events, ...delta.newEvents].slice(-200);
       const nextState: WorldState = {
         ...previous.worldState,
         tick: delta.tick,
@@ -427,76 +376,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       setupDraft,
       setupStatus: setupDraft ? "ready" : previous.setupStatus === "applied" ? "applied" : "drafting",
     })),
-  setSimulationMode: (mode) => set({ simulationMode: mode }),
-  runBattleSimulation: (config) => {
-    const { worldState } = get();
-    if (!worldState || worldState.agents.length === 0) {
-      console.warn("[Battle] No agents to simulate");
-      return;
-    }
-
-    const agents = worldState.agents;
-    const boardLinks = worldState.boardLinks ?? [];
-    const adapterResult = adaptBoardToBattle(agents, boardLinks);
-
-    const provider = get().aiSettings.provider;
-    const validProvider = (["openai", "anthropic", "gemini", "ollama"].includes(provider) ? provider : "openai") as "openai" | "anthropic" | "gemini" | "ollama";
-    
-    const battleConfig: BattleConfig = {
-      maxTicks: config?.maxTicks ?? 50,
-      seed: config?.seed ?? Date.now(),
-      dynamicConflict: config?.dynamicConflict ?? true,
-      narrativeStyle: config?.narrativeStyle ?? get().narrativeStyle,
-      llmEnhance: config?.llmEnhance ?? get().llmEnhanceEnabled,
-      llmApiKey: config?.llmApiKey ?? get().aiSettings.apiKey,
-      llmProvider: config?.llmProvider ?? validProvider,
-      llmModel: config?.llmModel ?? get().aiSettings.model,
-      ...config,
-    };
-
-    const engine = new BattleEngine(battleConfig);
-    engine.loadFromGraph(adapterResult.nodes, adapterResult.edges);
-
-    const frames = engine.run(battleConfig.maxTicks);
-    const events = engine.getEvents();
-    const narrative = engine.getNarrative();
-
-    set({
-      battleFrames: frames,
-      battleEvents: events,
-      battleCurrentFrame: 0,
-      battleWarnings: adapterResult.warnings,
-      battleNarrative: narrative,
-      simulationMode: "battle",
-    });
-  },
-  setBattleFrame: (frameIndex) => {
-    const { battleFrames } = get();
-    if (frameIndex >= 0 && frameIndex < battleFrames.length) {
-      set({ battleCurrentFrame: frameIndex });
-    }
-  },
-  nextBattleFrame: () => {
-    const { battleFrames, battleCurrentFrame } = get();
-    if (battleCurrentFrame < battleFrames.length - 1) {
-      set({ battleCurrentFrame: battleCurrentFrame + 1 });
-    }
-  },
-  prevBattleFrame: () => {
-    const { battleCurrentFrame } = get();
-    if (battleCurrentFrame > 0) {
-      set({ battleCurrentFrame: battleCurrentFrame - 1 });
-    }
-  },
-  resetBattleSimulation: () => {
-    set({
-      battleCurrentFrame: 0,
-    });
-  },
-  setNarrativeStyle: (style) => set({ narrativeStyle: style }),
-  setLlmEnhanceEnabled: (enabled) => set({ llmEnhanceEnabled: enabled }),
-  setBattleNarrativeExpanded: (expanded) => set({ battleNarrativeExpanded: expanded }),
-  updateBattleNarrative: (narrative) => set({ battleNarrative: narrative }),
   sync: async () => {
     const { branchId, projectId, worldState } = get();
     if (!branchId || !projectId) return;
@@ -507,21 +386,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
 
       const data = await response.json();
       if (data.branch && data.branch.currentTick >= (worldState?.tick ?? 0)) {
-        const newState = data.branch.latestState;
-        if (newState && JSON.stringify(newState) !== JSON.stringify(worldState)) {
-          get().setWorldState(newState);
-        }
+        get().setWorldState(data.branch.latestState);
       }
 
       const branchResponse = await fetch(`/api/branches?projectId=${projectId}`);
       if (!branchResponse.ok) return;
       const branchData = await branchResponse.json();
       if (branchData.branches) {
-        const currentBranchIds = get().branches.map(b => b.id).sort();
-        const newBranchIds = branchData.branches.map((b: TimelineBranch) => b.id).sort();
-        if (JSON.stringify(currentBranchIds) !== JSON.stringify(newBranchIds)) {
-          get().setBranches(branchData.branches);
-        }
+        get().setBranches(branchData.branches);
       }
     } catch (error) {
       console.error("[Sync] Heartbeat error:", error);
@@ -530,67 +402,4 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   currentTick: () => get().worldState?.tick ?? 0,
   aliveAgentCount: () =>
     get().worldState?.agents.filter((agent) => agent.status === "alive").length ?? 0,
-  clearBranchState: () => set({
-    worldState: null,
-    recentEvents: [],
-    lastProposals: [],
-    projections: [],
-    battleFrames: [],
-    battleEvents: [],
-    battleCurrentFrame: 0,
-    battleWarnings: [],
-    battleNarrative: "",
-    layoutPositions: new Map(),
-  }),
-  setLayoutMode: (mode) => set({ layoutMode: mode }),
-  setLayoutPositions: (positions) => set({ layoutPositions: positions }),
-  applyAutoLayout: () => {
-    const { worldState, layoutMode } = get();
-    if (layoutMode !== "assisted" || !worldState) return;
-
-    const { calculateLayout } = require("@/lib/layout");
-    
-    const nodes: Array<{ id: string; type: string; x?: number; y?: number }> = [];
-    
-    for (const agent of worldState.agents ?? []) {
-      nodes.push({
-        id: agent.id,
-        type: "agent",
-        x: agent.position?.x,
-        y: agent.position?.y,
-      });
-    }
-    
-    for (const node of worldState.campaignNodes ?? []) {
-      nodes.push({ 
-        id: node.id, 
-        type: node.kind ?? "campaignNode", 
-        x: (node as { position?: { x: number; y: number } }).position?.x, 
-        y: (node as { position?: { x: number; y: number } }).position?.y,
-      });
-    }
-
-    const edges: Array<{ id: string; source: string; target: string; type?: string }> = [];
-
-    for (const link of worldState.boardLinks ?? []) {
-      const sourceId = link.source.type === "agent" ? link.source.id : link.source.id;
-      const targetId = link.target.type === "agent" ? link.target.id : link.target.id;
-      
-      let edgeType: string = "causal";
-      if (link.type === "conflict") edgeType = "foe";
-      else if (link.type === "alliance") edgeType = "ally";
-      
-      edges.push({
-        id: link.id,
-        source: sourceId,
-        target: targetId,
-        type: edgeType,
-      });
-    }
-
-    const result = calculateLayout(nodes, edges);
-    
-    set({ layoutPositions: result.updatedPositions });
-    console.log("[AutoLayout] Applied positions:", result.updatedPositions);
-  },
 }));
