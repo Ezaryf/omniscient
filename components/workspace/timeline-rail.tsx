@@ -1,7 +1,6 @@
 "use client";
 
 import type { CausalityGraph, ProjectionArtifact, SimEvent, TimelineBranch } from "@/lib/sim/types";
-import type { BattleEvent } from "@/lib/sim/battle/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -46,21 +45,14 @@ export function TimelineRail({
   onSelectBranch,
   onForkFromEvent,
 }: TimelineRailProps) {
-  const workspaceSettings = useSimulationStore((state) => state.workspaceSettings);
-  const simulationMode = useSimulationStore((state) => state.simulationMode);
-  const battleEvents = useSimulationStore((state) => state.battleEvents);
-  const battleCurrentFrame = useSimulationStore((state) => state.battleCurrentFrame);
-  
-  const displayEvents = simulationMode === "battle" ? battleEvents : events;
-  const displayTick = simulationMode === "battle" ? battleCurrentFrame : currentTick;
-  
-  const maxTick = Math.max(displayTick, 20);
+  const { workspaceSettings } = useSimulationStore();
+  const maxTick = Math.max(currentTick, 20);
   const tickMarks = Array.from({ length: maxTick + 1 }, (_, index) => index);
   const eventsByTick = new Map<number, SimEvent[]>();
 
-  for (const event of displayEvents) {
+  for (const event of events) {
     const bucket = eventsByTick.get(event.tick) ?? [];
-    bucket.push(event as unknown as SimEvent);
+    bucket.push(event);
     eventsByTick.set(event.tick, bucket);
   }
 
@@ -107,7 +99,7 @@ export function TimelineRail({
               const tickEvents = eventsByTick.get(tick) ?? [];
               const branchPoint = branchPoints.find((point) => point.tick === tick);
               const xPercent = (tick / maxTick) * 100;
-              const isCurrent = tick === displayTick;
+              const isCurrent = tick === currentTick;
 
               return (
                 <div key={tick} className="absolute inset-y-0 w-px" style={{ left: `${xPercent}%` }}>
