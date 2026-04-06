@@ -1,13 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type { CampaignSetupDraft } from "@/lib/sim/types";
 import { useSimulationStore } from "@/lib/stores/simulation-store";
+import { ChevronRight, RefreshCw, Swords, Users, Zap, X } from "lucide-react";
 
 interface CampaignSetupSidecarProps {
   isOpen: boolean;
@@ -17,12 +13,11 @@ interface CampaignSetupSidecarProps {
   onApply: (draft: CampaignSetupDraft) => Promise<void>;
 }
 
-function cloneDraft(draft: CampaignSetupDraft) {
-  return JSON.parse(JSON.stringify(draft)) as CampaignSetupDraft;
+function cloneDraft(d: CampaignSetupDraft) {
+  return JSON.parse(JSON.stringify(d)) as CampaignSetupDraft;
 }
 
-const fieldLabelClassName =
-  "text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]";
+const FACTION_COLORS = ["#38bdf8", "#fb923c", "#a78bfa", "#4ade80", "#f472b6", "#facc15"];
 
 export function CampaignSetupSidecar({
   isOpen,
@@ -36,11 +31,10 @@ export function CampaignSetupSidecar({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<string | null>(null);
 
   useEffect(() => {
-    if (setupDraft) {
-      setDraft(cloneDraft(setupDraft));
-    }
+    if (setupDraft) setDraft(cloneDraft(setupDraft));
   }, [setupDraft]);
 
   const activeAiSettings = useMemo(
@@ -50,56 +44,38 @@ export function CampaignSetupSidecar({
 
   useEffect(() => {
     if (!isOpen || draft || !projectName.trim()) return;
-
     const controller = new AbortController();
     void (async () => {
       setIsGenerating(true);
       setError(null);
-
       try {
-        const response = await fetch("/api/projects/generate-setup", {
+        const res = await fetch("/api/projects/generate-setup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: projectName,
-            description: projectDescription,
-            aiSettings: activeAiSettings,
-          }),
+          body: JSON.stringify({ name: projectName, description: projectDescription, aiSettings: activeAiSettings }),
           signal: controller.signal,
         });
-        const data = await response.json();
-        if (!response.ok || !data.draft) {
-          throw new Error(data.error || "Unable to generate setup.");
-        }
-
+        const data = await res.json();
+        if (!res.ok || !data.draft) throw new Error(data.error || "Unable to generate setup.");
         setSetupDraft(data.draft);
         setDraft(cloneDraft(data.draft));
         setSetupStatus("ready");
-      } catch (generationError) {
-        if ((generationError as Error).name === "AbortError") return;
-        const message =
-          generationError instanceof Error ? generationError.message : "Unable to generate setup.";
-        setError(message);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Unable to generate setup.");
       } finally {
         setIsGenerating(false);
       }
     })();
-
     return () => controller.abort();
   }, [activeAiSettings, draft, isOpen, projectDescription, projectName, setSetupDraft, setSetupStatus]);
 
   if (!isOpen) return null;
 
-  const patchDraft = (next: CampaignSetupDraft) => {
+  const patch = (next: CampaignSetupDraft) => {
     setDraft(next);
     setSetupDraft(next);
     setSetupStatus("ready");
-  };
-
-  const handleRegenerate = async () => {
-    setDraft(null);
-    setSetupDraft(null);
-    setSetupStatus("drafting");
   };
 
   const handleApply = async () => {
@@ -109,299 +85,247 @@ export function CampaignSetupSidecar({
     try {
       await onApply(draft);
       setSetupStatus("applied");
-    } catch (applyError) {
-      const message =
-        applyError instanceof Error ? applyError.message : "Failed to launch timeline.";
-      setError(message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to launch timeline.");
     } finally {
       setIsApplying(false);
     }
   };
 
-  const statusLabel =
-    setupStatus === "drafting"
-      ? "Drafting setup"
-      : setupStatus === "ready"
-        ? "Setup ready"
-        : setupStatus === "applied"
-          ? "Timeline launched"
-          : "Setup hidden";
-
   return (
-    <aside className="absolute inset-y-3 right-3 z-30 flex w-[min(460px,calc(100%-24px))] flex-col overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--bg-panel)] shadow-dock">
-      <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-dock)]/92 p-5">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div className="space-y-3">
-            <Badge variant="accent" className="w-fit">
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex w-full max-w-[540px] max-h-[88vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0a0c10] shadow-[0_32px_80px_rgba(0,0,0,0.7)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/8 px-6 py-5">
+          <div>
+            <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.22em] text-white/25">
               Campaign Setup
-            </Badge>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                {projectName || "New timeline"}
-              </h2>
-              <p className="max-w-[34ch] text-sm leading-6 text-[var(--text-secondary)]">
-                Build the first consequence, approve the factions and fronts, and launch a usable
-                campaign state instead of landing in an empty shell.
-              </p>
             </div>
+            <h2 className="text-[22px] font-bold tracking-tight text-white leading-tight">
+              {projectName || "New Timeline"}
+            </h2>
           </div>
-          <Button className="shrink-0" variant="ghost" size="sm" type="button" onClick={onClose}>
-            Dismiss
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <Badge variant={setupStatus === "applied" ? "success" : "default"}>{statusLabel}</Badge>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={handleRegenerate}
-            disabled={isGenerating || isApplying}
+          <button
+            onClick={onClose}
+            className="mt-0.5 rounded-lg p-1.5 text-white/25 transition-all hover:bg-white/8 hover:text-white/60"
           >
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Loading */}
+          {isGenerating && (
+            <div className="flex items-center gap-4 px-6 py-8">
+              <div className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-white/15 border-t-white/60" />
+              <div>
+                <div className="text-sm font-semibold text-white/80">Building your scenario...</div>
+                <div className="mt-0.5 text-xs text-white/35">Generating factions, actors, and opening conflict</div>
+              </div>
+            </div>
+          )}
+
+          {draft && !isGenerating && (
+            <div className="space-y-5 px-6 py-5">
+
+              {/* Premise */}
+              <div>
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/25">Premise</div>
+                <div className="rounded-xl border border-white/8 bg-white/3 px-4 py-3">
+                  {editingField === "premise" ? (
+                    <textarea
+                      autoFocus
+                      value={draft.premise}
+                      rows={3}
+                      onChange={(e) => patch({ ...draft, premise: e.target.value })}
+                      onBlur={() => setEditingField(null)}
+                      className="w-full resize-none bg-transparent text-sm leading-relaxed text-white/80 outline-none"
+                    />
+                  ) : (
+                    <p
+                      className="cursor-text text-sm leading-relaxed text-white/60 hover:text-white/80 transition-colors"
+                      onClick={() => setEditingField("premise")}
+                    >
+                      {draft.premise}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Factions */}
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <Swords size={12} className="text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Factions</span>
+                  <span className="ml-auto text-[10px] text-white/25">{draft.factions.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {draft.factions.map((faction, fi) => {
+                    const color = FACTION_COLORS[fi % FACTION_COLORS.length];
+                    return (
+                      <div key={faction.id} className="rounded-xl border border-white/8 bg-white/3 p-4">
+                        <div className="flex items-center gap-2.5 mb-2.5">
+                          <div className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                          <input
+                            value={faction.name}
+                            onChange={(e) => patch({ ...draft, factions: draft.factions.map((f, i) => i === fi ? { ...f, name: e.target.value } : f) })}
+                            className="flex-1 bg-transparent text-[15px] font-bold text-white outline-none"
+                          />
+                        </div>
+                        <input
+                          value={faction.identity}
+                          onChange={(e) => patch({ ...draft, factions: draft.factions.map((f, i) => i === fi ? { ...f, identity: e.target.value } : f) })}
+                          className="w-full bg-transparent text-xs text-white/45 outline-none"
+                          placeholder="Identity..."
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Actors */}
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <Users size={12} className="text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Actors</span>
+                  <span className="ml-auto text-[10px] text-white/25">{draft.actors.length}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {draft.actors.map((actor, ai) => {
+                    const fi = draft.factions.findIndex((f) => f.id === actor.factionId);
+                    const color = FACTION_COLORS[fi % FACTION_COLORS.length] ?? "#94a3b8";
+                    const factionName = draft.factions[fi]?.name ?? "";
+                    return (
+                      <div key={actor.id} className="rounded-xl border border-white/8 bg-white/3 p-3">
+                        <div className="mb-1.5 flex items-center gap-1.5">
+                          <div className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                          <span className="truncate text-[9px] font-bold uppercase tracking-wider" style={{ color: `${color}80` }}>
+                            {factionName}
+                          </span>
+                        </div>
+                        <input
+                          value={actor.name}
+                          onChange={(e) => patch({ ...draft, actors: draft.actors.map((a, i) => i === ai ? { ...a, name: e.target.value } : a) })}
+                          className="w-full bg-transparent text-[13px] font-semibold text-white outline-none"
+                        />
+                        <div className="mt-0.5 truncate text-[10px] text-white/30">{actor.role}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Fronts */}
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <Zap size={12} className="text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Active Fronts</span>
+                  <span className="ml-auto text-[10px] text-white/25">{draft.fronts.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {draft.fronts.map((front, fi) => (
+                    <div key={front.id} className="rounded-xl border border-amber-500/15 bg-amber-500/5 p-3">
+                      <input
+                        value={front.name}
+                        onChange={(e) => patch({ ...draft, fronts: draft.fronts.map((f, i) => i === fi ? { ...f, name: e.target.value } : f) })}
+                        className="w-full bg-transparent text-[13px] font-semibold text-white/90 outline-none mb-1"
+                      />
+                      <div className="text-[11px] leading-relaxed text-white/35">{front.stakes}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Opening event */}
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Opening Event</span>
+                  <span
+                    className="ml-auto rounded-full px-2 py-0.5 text-[9px] font-bold"
+                    style={{
+                      backgroundColor: draft.generatedBy === "ai" ? "#38bdf815" : "#ffffff08",
+                      color: draft.generatedBy === "ai" ? "#38bdf8" : "#ffffff30",
+                    }}
+                  >
+                    {draft.generatedBy === "ai" ? "AI" : "Fallback"}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-white/8 bg-white/3 px-4 py-3">
+                  {editingField === "event" ? (
+                    <textarea
+                      autoFocus
+                      value={draft.incitingEvent.description}
+                      rows={3}
+                      onChange={(e) => patch({ ...draft, incitingEvent: { ...draft.incitingEvent, description: e.target.value } })}
+                      onBlur={() => setEditingField(null)}
+                      className="w-full resize-none bg-transparent text-sm leading-relaxed text-white/80 outline-none"
+                    />
+                  ) : (
+                    <p
+                      className="cursor-text text-sm leading-relaxed text-white/60 hover:text-white/80 transition-colors"
+                      onClick={() => setEditingField("event")}
+                    >
+                      {draft.incitingEvent.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          )}
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="mx-6 mb-3 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2 text-xs text-red-400">
+            {error}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex shrink-0 items-center gap-3 border-t border-white/8 px-6 py-4">
+          <button
+            onClick={() => { setDraft(null); setSetupDraft(null); setSetupStatus("drafting"); }}
+            disabled={isGenerating || isApplying}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-medium text-white/35 transition-all hover:bg-white/6 hover:text-white/60 disabled:opacity-30"
+          >
+            <RefreshCw size={11} />
             Regenerate
-          </Button>
-        </div>
-      </div>
-
-      {isGenerating ? (
-        <div className="m-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/75 p-4">
-          <div className="mb-1 text-sm font-semibold text-[var(--text-primary)]">
-            Forging your opening board...
-          </div>
-          <p className="text-sm leading-6 text-[var(--text-secondary)]">
-            Turning the title into factions, routes, contested fronts, and a first rupture.
-          </p>
-        </div>
-      ) : null}
-
-      {draft ? (
-        <ScrollArea className="flex-1">
-          <div className="grid gap-5 p-5">
-            <section className="grid gap-2">
-              <label className={fieldLabelClassName}>Premise</label>
-              <Textarea
-                value={draft.premise}
-                rows={4}
-                onChange={(event) => patchDraft({ ...draft, premise: event.target.value })}
-              />
-            </section>
-
-            <section className="grid gap-3">
-              <div className="flex items-center justify-between text-sm text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">Factions</strong>
-                <Badge>{draft.factions.length}</Badge>
-              </div>
-              <div className="grid gap-3">
-                {draft.factions.map((faction, index) => (
-                  <div
-                    key={faction.id}
-                    className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/72 p-3"
-                  >
-                    <Input
-                      value={faction.name}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          factions: draft.factions.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, name: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                    <Textarea
-                      value={faction.identity}
-                      rows={2}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          factions: draft.factions.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, identity: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                    <Textarea
-                      value={faction.goal}
-                      rows={2}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          factions: draft.factions.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, goal: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="grid gap-3">
-              <div className="flex items-center justify-between text-sm text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">Actors</strong>
-                <Badge>{draft.actors.length}</Badge>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                {draft.actors.map((actor, index) => (
-                  <div
-                    key={actor.id}
-                    className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/72 p-3"
-                  >
-                    <Input
-                      value={actor.name}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          actors: draft.actors.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, name: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                    <Input
-                      value={actor.role}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          actors: draft.actors.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, role: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="grid gap-3">
-              <div className="flex items-center justify-between text-sm text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">Regions and fronts</strong>
-                <Badge>
-                  {draft.regions.length} regions / {draft.fronts.length} fronts
-                </Badge>
-              </div>
-              <div className="grid gap-3">
-                {draft.regions.map((region, index) => (
-                  <div
-                    key={region.id}
-                    className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/72 p-3"
-                  >
-                    <Input
-                      value={region.name}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          regions: draft.regions.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, name: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                    <Textarea
-                      value={region.summary}
-                      rows={2}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          regions: draft.regions.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, summary: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                {draft.fronts.map((front, index) => (
-                  <div
-                    key={front.id}
-                    className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/72 p-3"
-                  >
-                    <Input
-                      value={front.name}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          fronts: draft.fronts.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, name: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                    <Textarea
-                      value={front.stakes}
-                      rows={2}
-                      onChange={(event) =>
-                        patchDraft({
-                          ...draft,
-                          fronts: draft.fronts.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, stakes: event.target.value } : item
-                          ),
-                        })
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="grid gap-3">
-              <div className="flex items-center justify-between text-sm text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">Inciting consequence</strong>
-                <Badge variant={draft.generatedBy === "ai" ? "accent" : "default"}>
-                  {draft.generatedBy === "ai" ? "AI suggested" : "Fallback suggested"}
-                </Badge>
-              </div>
-              <Textarea
-                value={draft.incitingEvent.description}
-                rows={3}
-                onChange={(event) =>
-                  patchDraft({
-                    ...draft,
-                    incitingEvent: { ...draft.incitingEvent, description: event.target.value },
-                  })
-                }
-              />
-              <Textarea
-                value={draft.incitingEvent.stakes}
-                rows={2}
-                onChange={(event) =>
-                  patchDraft({
-                    ...draft,
-                    incitingEvent: { ...draft.incitingEvent, stakes: event.target.value },
-                  })
-                }
-              />
-            </section>
-          </div>
-        </ScrollArea>
-      ) : null}
-
-      {error ? <p className="px-5 pb-3 text-sm text-[#efb0b0]">{error}</p> : null}
-
-      <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-dock)]/9 p-5">
-        <div className="mb-4 text-sm leading-6 text-[var(--text-secondary)]">
-          Launching applies the approved draft to the current branch, creates the first event, and
-          turns the blank map into a usable campaign state.
-        </div>
-        <div className="flex items-center justify-end gap-3">
-          <Button variant="ghost" type="button" onClick={onClose}>
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-[12px] font-medium text-white/35 transition-all hover:bg-white/6 hover:text-white/60"
+          >
             Close
-          </Button>
-          <Button
-            variant="primary"
-            type="button"
+          </button>
+          <button
             onClick={handleApply}
             disabled={!draft || isGenerating || isApplying}
+            className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-[13px] font-bold text-black transition-all hover:bg-white/90 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {isApplying ? "Launching..." : "Launch timeline"}
-          </Button>
+            {isApplying ? (
+              <>
+                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/20 border-t-black" />
+                Launching...
+              </>
+            ) : (
+              <>
+                Launch Timeline
+                <ChevronRight size={14} />
+              </>
+            )}
+          </button>
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
