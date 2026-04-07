@@ -1,9 +1,9 @@
 "use client";
 
+
 import { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { PanelLeft, PanelRight, PanelBottom } from "lucide-react";
 import type { BoardSelection, CampaignSetupDraft, CanvasBinding, TimelineBranch } from "@/lib/sim/types";
 import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,6 @@ import { ReactFlowWorldCanvas } from "@/components/workspace/react-flow-world-ca
 import { type BoardTool, type WorldCanvasHandle, type WorldCanvasUiState } from "@/components/workspace/world-canvas";
 import { InjectEventModal } from "@/components/workspace/inject-event-modal";
 import { CreateBranchModal } from "@/components/workspace/create-branch-modal";
-import { BattleNarrativeInline } from "@/components/workspace/battle-narrative-inline";
 import { DEFAULT_WORKSPACE_SETTINGS, useSimulationStore } from "@/lib/stores/simulation-store";
 import { DEMO_PROJECT_ID } from "@/lib/server/store";
 
@@ -35,40 +34,46 @@ function resolvePendingDelete(
   worldState: NonNullable<ReturnType<typeof useSimulationStore.getState>["worldState"]>
 ): PendingDelete | null {
   if (!selection) return null;
-
-  const { type, id } = selection;
-  let label: string | undefined;
-
-  switch (type) {
-    case "agent":
-      label = worldState.agents.find(a => a.id === id)?.name;
-      break;
-    case "campaignNode":
-      label = worldState.campaignNodes.find(n => n.id === id)?.name;
-      break;
-    case "region":
-      label = worldState.map.regions.find(r => r.id === id)?.name;
-      break;
-    case "site":
-      label = worldState.map.sites.find(s => s.id === id)?.name;
-      break;
-    case "route":
-      label = worldState.map.routes.find(r => r.id === id)?.name;
-      break;
-    case "front":
-      label = worldState.fronts.find(f => f.id === id)?.name;
-      break;
-    case "token":
-      label = worldState.map.tokens.find(t => t.id === id)?.name;
-      break;
-    case "boardLink": {
-      const link = worldState.boardLinks.find(l => l.id === id);
-      label = link?.label ?? (link ? `${link.type} link` : undefined);
-      break;
-    }
+  if (selection.type === "agent") {
+    const agent = worldState.agents.find((entry) => entry.id === selection.id);
+    if (!agent) return null;
+    return { type: "agent", id: agent.id, label: agent.name };
   }
-
-  return label ? { type, id, label } : null;
+  if (selection.type === "campaignNode") {
+    const node = worldState.campaignNodes.find((entry) => entry.id === selection.id);
+    if (!node) return null;
+    return { type: "campaignNode", id: node.id, label: node.name };
+  }
+  if (selection.type === "region") {
+    const region = worldState.map.regions.find((entry) => entry.id === selection.id);
+    if (!region) return null;
+    return { type: "region", id: region.id, label: region.name };
+  }
+  if (selection.type === "site") {
+    const site = worldState.map.sites.find((entry) => entry.id === selection.id);
+    if (!site) return null;
+    return { type: "site", id: site.id, label: site.name };
+  }
+  if (selection.type === "route") {
+    const route = worldState.map.routes.find((entry) => entry.id === selection.id);
+    if (!route) return null;
+    return { type: "route", id: route.id, label: route.name };
+  }
+  if (selection.type === "front") {
+    const front = worldState.fronts.find((entry) => entry.id === selection.id);
+    if (!front) return null;
+    return { type: "front", id: front.id, label: front.name };
+  }
+  if (selection.type === "boardLink") {
+    const link = worldState.boardLinks.find((entry) => entry.id === selection.id);
+    if (!link) return null;
+    return {
+      type: "boardLink",
+      id: link.id,
+      label: link.label ?? `${link.type} link`,
+    };
+  }
+  return null;
 }
 
 function WorkspaceContent() {
@@ -88,7 +93,6 @@ function WorkspaceContent() {
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoplayArmedRef = useRef(true);
   const syncInFlightRef = useRef(false);
-  const commandQueueRef = useRef<Promise<any>>(Promise.resolve());
   const worldCanvasRef = useRef<WorldCanvasHandle | null>(null);
 
   const [showInjectModal, setShowInjectModal] = useState(false);
@@ -126,7 +130,6 @@ function WorkspaceContent() {
     isNewSimulation,
     setupStatus,
     setupDraft,
-    layoutPositions,
     setProject,
     setProjectMeta,
     setBranch,
@@ -138,11 +141,11 @@ function WorkspaceContent() {
     setLastProposals,
     setSetupStatus,
     sync,
-    clearBranchState,
   } = useSimulationStore();
 
   const agents = useMemo(() => worldState?.agents ?? [], [worldState?.agents]);
   const boardLinks = useMemo(() => worldState?.boardLinks ?? [], [worldState?.boardLinks]);
+  const boardGroups = useMemo(() => worldState?.boardGroups ?? [], [worldState?.boardGroups]);
   const campaignNodes = useMemo(() => worldState?.campaignNodes ?? [], [worldState?.campaignNodes]);
   const relationships = useMemo(() => worldState?.relationships ?? [], [worldState?.relationships]);
   const fronts = useMemo(() => worldState?.fronts ?? [], [worldState?.fronts]);
@@ -194,52 +197,14 @@ function WorkspaceContent() {
     [setBranches]
   );
 
-  // Auto-dismiss setup sidecar when timeline is launched
-  useEffect(() => {
-    if (setupStatus === "applied") {
-      setShowSetup(false);
-    }
-  }, [setupStatus]);
-
-  const isFocusMode = layout.leftCollapsed && layout.rightCollapsed && layout.timelineCollapsed;
-  const toggleFocusMode = () => {
-    if (isFocusMode) {
-      if (layout.leftCollapsed) toggleDock("left");
-      if (layout.rightCollapsed) toggleDock("right");
-      if (layout.timelineCollapsed) toggleDock("timeline");
-    } else {
-      if (!layout.leftCollapsed) toggleDock("left");
-      if (!layout.rightCollapsed) toggleDock("right");
-      if (!layout.timelineCollapsed) toggleDock("timeline");
-    }
-  };
-
-  // Ref to track last synced query to prevent dependency loops
-  const lastSyncedQueryRef = useRef<string | null>(null);
-
-  // Sync state to URL search parameters
   useEffect(() => {
     if (workspaceSurface !== "map") return;
-    
-    const queryPayload = {
+    updateWorkspaceQuery({
       tool: boardUiState.activeTool === "inspect" ? null : boardUiState.activeTool,
       selectionType: selectedEntity?.type ?? null,
       selectionId: selectedEntity?.id ?? null,
-    };
-    
-    // Create query string to check for changes before calling update
-    const nextParams = new URLSearchParams(searchParams.toString());
-    Object.entries(queryPayload).forEach(([key, value]) => {
-      if (!value) nextParams.delete(key);
-      else nextParams.set(key, value);
     });
-    
-    const nextQuery = nextParams.toString();
-    if (nextQuery === lastSyncedQueryRef.current) return;
-    
-    lastSyncedQueryRef.current = nextQuery;
-    updateWorkspaceQuery(queryPayload);
-  }, [boardUiState.activeTool, selectedEntity?.id, selectedEntity?.type, updateWorkspaceQuery, workspaceSurface, searchParams]);
+  }, [boardUiState.activeTool, selectedEntity, updateWorkspaceQuery, workspaceSurface]);
 
   useEffect(() => {
     setProject(projectId);
@@ -303,77 +268,54 @@ function WorkspaceContent() {
 
   const executeCommand = useCallback(
     async (payload: Record<string, unknown>) => {
-      return new Promise<any>((resolve, reject) => {
-        commandQueueRef.current = commandQueueRef.current.then(async () => {
-          try {
-            const state = useSimulationStore.getState();
-            const currentBranchId = state.branchId;
-            const currentTick = state.worldState?.tick ?? 0;
-            if (!currentBranchId) {
-              resolve(null);
-              return;
-            }
+      const currentBranchId = useSimulationStore.getState().branchId;
+      const currentTick = useSimulationStore.getState().worldState?.tick ?? 0;
+      if (!currentBranchId) return null;
 
-            const response = await fetch("/api/sim", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                branchId: currentBranchId,
-                currentTick,
-                ...payload,
-              }),
-            });
-
-            const text = await response.text();
-            let data;
-            try {
-              data = JSON.parse(text);
-            } catch (e) {
-              console.error("Failed to parse API response as JSON:", text);
-              if (!response.ok) {
-                const err = new Error(`Server returned ${response.status}: ${text.slice(0, 100)}...`);
-                reject(err);
-                return;
-              }
-              const err = new Error("Invalid server response format.");
-              reject(err);
-              return;
-            }
-
-            if (response.status === 409) {
-              alert(data.error);
-              resolve(null);
-              return;
-            }
-            if (!response.ok) {
-              const err = new Error(data.error || "Simulation command failed.");
-              reject(err);
-              return;
-            }
-
-            if (data.delta) applyDelta(data.delta);
-            if (data.worldState) setWorldState(data.worldState);
-            if (data.events) addEvents(data.events);
-            if (data.proposals) setLastProposals(data.proposals);
-            if (data.branch) upsertBranch(data.branch);
-
-            resolve(data);
-          } catch (error) {
-            console.error(error);
-            reject(error);
-          }
-        });
+      const response = await fetch("/api/sim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: currentBranchId,
+          currentTick,
+          ...payload,
+        }),
       });
+
+      const data = await response.json();
+      if (response.status === 409) {
+        alert(data.error);
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(data.error || "Simulation command failed.");
+      }
+
+      if (data.delta) {
+        applyDelta(data.delta);
+      }
+      if (data.worldState) {
+        setWorldState(data.worldState);
+      }
+      if (data.events) {
+        addEvents(data.events);
+      }
+      if (data.proposals) {
+        setLastProposals(data.proposals);
+      }
+      if (data.branch) {
+        upsertBranch(data.branch);
+      }
+
+      return data;
     },
     [addEvents, applyDelta, setLastProposals, setWorldState, upsertBranch]
   );
 
   const executeTick = useCallback(async () => {
-    if (syncInFlightRef.current) return;
     const state = useSimulationStore.getState();
     if (!state.branchId) return;
 
-    syncInFlightRef.current = true;
     setStatus("stepping");
     try {
       const response = await fetch("/api/sim", {
@@ -387,32 +329,25 @@ function WorkspaceContent() {
         }),
       });
 
-      const text = await response.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        console.error("Failed to parse API response as JSON:", text);
-        if (!response.ok) throw new Error(`Server returned ${response.status}: ${text.slice(0, 100)}...`);
-        throw new Error("Invalid server response format.");
-      }
-
+      const data = await response.json();
       if (response.status === 409) {
         alert(data.error);
         setStatus("error");
         return;
       }
 
-      if (data.delta) applyDelta(data.delta);
-      if (data.worldState) setWorldState(data.worldState);
+      if (data.delta) {
+        applyDelta(data.delta);
+      }
+      if (data.worldState) {
+        setWorldState(data.worldState);
+      }
       addEvents(data.events ?? []);
       setLastProposals(data.proposals ?? []);
       setStatus("idle");
     } catch (error) {
       console.error("Tick failed:", error);
       setStatus("error");
-    } finally {
-      syncInFlightRef.current = false;
     }
   }, [addEvents, applyDelta, setLastProposals, setStatus, setWorldState]);
 
@@ -510,6 +445,68 @@ function WorkspaceContent() {
       }
     },
     [executeCommand, setSetupStatus, setStatus, sync]
+  );
+
+  const onUpdateCampaignNode = useCallback(
+    async (nodeId: string, patch: { name?: string; description?: string; status?: string; tags?: string[]; metrics?: Record<string, number> }) => {
+      await executeCommand({ type: "updateCampaignNode", nodeId, ...patch });
+    },
+    [executeCommand]
+  );
+
+  const onUpdateAgent = useCallback(
+    async (agentId: string, patch: { name?: string; description?: string }) => {
+      await executeCommand({ type: "updateAgent", agentId, ...patch });
+    },
+    [executeCommand]
+  );
+
+  const onUpdateBoardLink = useCallback(
+    async (linkId: string, patch: { linkType?: any; label?: string | null }) => {
+      await executeCommand({ type: "updateBoardLink", linkId, ...patch });
+    },
+    [executeCommand]
+  );
+
+  const onCreateBoardGroup = useCallback(
+    async (payload: {
+      name: string;
+      polygon: Array<{ x: number; y: number }>;
+      memberNodeIds: string[];
+      semanticHint?: any;
+      accent?: string | null;
+      tone?: string | null;
+      label?: string | null;
+    }) => {
+      await executeCommand({
+        type: "createBoardGroup",
+        ...payload,
+        semanticHint: payload.semanticHint ?? "cluster",
+        accent: payload.accent ?? null,
+        tone: payload.tone ?? null,
+        label: payload.label ?? null,
+      });
+    },
+    [executeCommand]
+  );
+
+  const onUpdateBoardGroupPolygon = useCallback(
+    async (payload: {
+      groupId: string;
+      polygon: Array<{ x: number; y: number }>;
+      name?: string;
+      memberNodeIds?: string[];
+      semanticHint?: any;
+      accent?: string | null;
+      tone?: string | null;
+      label?: string | null;
+    }) => {
+      await executeCommand({
+        type: "updateBoardGroupPolygon",
+        ...payload,
+      });
+    },
+    [executeCommand]
   );
 
   const onMoveToken = useCallback(
@@ -726,9 +723,6 @@ function WorkspaceContent() {
         case "boardLink":
           await executeCommand({ type: "deleteBoardLink", linkId: pendingDelete.id });
           break;
-        case "token":
-          await executeCommand({ type: "deleteToken", tokenId: pendingDelete.id });
-          break;
       }
       setDeleteFeedback({ tone: "success", message: `${pendingDelete.label} removed from the board.` });
     } catch (error) {
@@ -768,7 +762,6 @@ function WorkspaceContent() {
 
   const handleSelectBranch = useCallback(
     (nextBranchId: string) => {
-      clearBranchState();
       setBranch(nextBranchId);
       const candidate = branches.find((branch) => branch.id === nextBranchId);
       if (candidate?.latestState) {
@@ -776,7 +769,7 @@ function WorkspaceContent() {
       }
       updateWorkspaceQuery({ branchId: nextBranchId });
     },
-    [branches, clearBranchState, setBranch, setWorldState, updateWorkspaceQuery]
+    [branches, setBranch, setWorldState, updateWorkspaceQuery]
   );
 
   const handleSetSurface = useCallback(
@@ -822,9 +815,6 @@ function WorkspaceContent() {
       return;
     }
     if (syncInFlightRef.current) {
-      return;
-    }
-    if (state.simulationMode === "battle") {
       return;
     }
 
@@ -910,32 +900,43 @@ function WorkspaceContent() {
         } as CSSProperties
       }
     >
-      <header className="workspace-header flex items-center justify-between px-3 py-2 border-b border-(--border-subtle) bg-(--bg-shell)">
-        <div className="flex items-center gap-3">
+      <header className="workspace-header">
+        <div className="workspace-header-row">
           <Link
             href="/"
-            className="flex h-8 items-center justify-center rounded-md border border-(--border-subtle) bg-(--bg-panel) px-2 text-[11px] font-semibold uppercase tracking-widest text-(--text-secondary) transition hover:text-(--text-primary)"
-            title="Back to Simulations"
+            className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
           >
-            &larr;
+            &larr; Simulations
           </Link>
-          <div className="flex flex-col">
-            <strong className="text-sm font-semibold tracking-[-0.02em] text-(--text-primary) leading-tight">
-              {resolvedProjectMeta?.name ?? "Campaign Workspace"}
-            </strong>
-            {setupStatus !== "applied" && (
-              <span className="text-[10px] font-medium uppercase text-(--status-warning) leading-tight">Setup pending</span>
-            )}
+          <div className="h-4 w-px bg-[var(--border-subtle)]" />
+          <div className="workspace-title">
+            <strong>{resolvedProjectMeta?.name ?? "Campaign Workspace"}</strong>
+            <span>
+              {resolvedProjectMeta?.description ||
+                "Shape the first consequence, then watch the map answer back."}
+            </span>
           </div>
-          
-          <div className="ml-3 flex items-center gap-1 rounded-md border border-(--border-subtle) bg-(--bg-panel) p-0.5">
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Badge variant="accent">
+              {workspaceSurface === "map" ? "Campaign Map" : "Freeform Canvas"}
+            </Badge>
+            <Badge variant="default">{activeBranch?.name ?? "No branch selected"}</Badge>
+            <Badge variant={setupStatus === "applied" ? "success" : "warning"}>
+              {setupStatus === "applied" ? "Setup applied" : "Setup pending"}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="workspace-header-row">
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-1">
             <button
               type="button"
               onClick={() => handleSetSurface("map")}
-              className={`rounded px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
+              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                 workspaceSurface === "map"
-                  ? "bg-(--bg-elevated) text-(--text-primary) shadow-sm"
-                  : "text-(--text-secondary) hover:text-(--text-primary)"
+                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
               Map
@@ -943,17 +944,65 @@ function WorkspaceContent() {
             <button
               type="button"
               onClick={() => handleSetSurface("canvas")}
-              className={`rounded px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
+              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                 workspaceSurface === "canvas"
-                  ? "bg-(--bg-elevated) text-(--text-primary) shadow-sm"
-                  : "text-(--text-secondary) hover:text-(--text-primary)"
+                  ? "bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
               Canvas
             </button>
           </div>
-        </div>
 
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("left")}
+            >
+              {layout.leftCollapsed ? "World" : "Hide world"}
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("right")}
+            >
+              {layout.rightCollapsed ? "Context" : "Hide context"}
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              onClick={() => toggleDock("timeline")}
+            >
+              {layout.timelineCollapsed ? "Timeline" : "Hide timeline"}
+            </button>
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            <label
+              htmlFor="branch-select"
+              className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]"
+            >
+              Branch
+            </label>
+            <select
+              id="branch-select"
+              value={branchId ?? ""}
+              onChange={(event) => handleSelectBranch(event.target.value)}
+              className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 text-sm text-[var(--text-primary)] outline-none"
+            >
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+            <Badge variant="default">Tick {worldState?.tick ?? 0}</Badge>
+          </div>
+        </div>
+      </header>
+
+      <div className="workspace-control">
         <ControlBar
           projectId={projectId}
           onStep={executeTick}
@@ -967,73 +1016,9 @@ function WorkspaceContent() {
             setSetupStatus(setupDraft ? "ready" : "drafting");
           }}
         />
+      </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 border-r border-(--border-subtle) pr-3 mr-1">
-            <label
-              htmlFor="branch-select"
-              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-(--text-muted)"
-            >
-              Branch
-            </label>
-            <select
-              id="branch-select"
-              value={branchId ?? ""}
-              onChange={(event) => handleSelectBranch(event.target.value)}
-              className="h-8 rounded-md border border-(--border-subtle) bg-(--bg-panel) px-2 text-xs text-(--text-primary) outline-none"
-            >
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>
-                  {branch.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <Button
-              variant={layout.leftCollapsed ? "ghost" : "secondary"}
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={() => toggleDock("left")}
-              title="Toggle World Panel"
-            >
-              <PanelLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={layout.timelineCollapsed ? "ghost" : "secondary"}
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={() => toggleDock("timeline")}
-              title="Toggle Timeline"
-            >
-              <PanelBottom className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={layout.rightCollapsed ? "ghost" : "secondary"}
-              size="sm"
-              className="h-8 w-8 p-0"
-              onClick={() => toggleDock("right")}
-              title="Toggle Context Panel"
-            >
-              <PanelRight className="h-4 w-4" />
-            </Button>
-            <div className="mx-1 h-4 w-px bg-(--border-subtle)" />
-            <Button
-              variant={isFocusMode ? "primary" : "ghost"}
-              size="sm"
-              className="h-8 px-2 text-[10px] font-bold uppercase tracking-wider"
-              onClick={toggleFocusMode}
-              title={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
-            >
-              {isFocusMode ? "Exit Focus" : "Focus"}
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <div className="workspace-main relative">
-        <BattleNarrativeInline />
+      <div className="workspace-main">
         <div className="workspace-panel workspace-panel-left">
           {layout.leftCollapsed ? (
             <CollapsedDock label="World" onExpand={() => toggleDock("left")} />
@@ -1079,6 +1064,7 @@ function WorkspaceContent() {
               ref={worldCanvasRef}
               agents={agents}
               boardLinks={boardLinks}
+              boardGroups={boardGroups}
               campaignNodes={campaignNodes}
               relationships={relationships}
               map={worldMap}
@@ -1091,6 +1077,11 @@ function WorkspaceContent() {
               onResizeRegion={onResizeRegion}
               onMoveAgent={onMoveAgent}
               onMoveCampaignNode={onMoveCampaignNode}
+              onUpdateCampaignNode={onUpdateCampaignNode}
+              onUpdateAgent={onUpdateAgent}
+              onUpdateBoardLink={onUpdateBoardLink}
+              onCreateBoardGroup={onCreateBoardGroup}
+              onUpdateBoardGroupPolygon={onUpdateBoardGroupPolygon}
               onCreateRegion={onCreateRegion}
               onCreateSite={onCreateSite}
               onCreateToken={onCreateToken}
@@ -1100,7 +1091,6 @@ function WorkspaceContent() {
               onRequestDeleteSelection={requestDeleteSelection}
               initialTool={(searchParams.get("tool") as BoardTool | null) ?? "inspect"}
               onToolStateChange={setBoardUiState}
-              layoutPositions={layoutPositions}
             />
           )}
         </div>
@@ -1189,14 +1179,14 @@ function WorkspaceContent() {
       />
 
       {pendingDelete ? (
-        <div className="absolute bottom-[calc(var(--workspace-panel-pad)+16px)] left-1/2 z-30 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-(--border-strong) bg-(--bg-panel)/96 p-4 shadow-[0_22px_56px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+        <div className="absolute bottom-[calc(var(--workspace-panel-pad)+16px)] left-1/2 z-30 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-panel)]/96 p-4 shadow-[0_22px_56px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-(--text-muted)">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                 Confirm Removal
               </div>
-              <p className="mt-2 text-sm leading-6 text-(--text-secondary)">
-                Remove <span className="font-semibold text-(--text-primary)">{pendingDelete.label}</span> from the campaign board?
+              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                Remove <span className="font-semibold text-[var(--text-primary)]">{pendingDelete.label}</span> from the campaign board?
               </p>
             </div>
             <Badge variant="warning">
@@ -1227,11 +1217,11 @@ function WorkspaceContent() {
       ) : null}
 
       {deleteFeedback ? (
-        <div className="absolute right-6 bottom-6 z-50">
-          <div className={`rounded-xl border px-5 py-3 shadow-[0_22px_52px_rgba(0,0,0,0.45)] backdrop-blur-2xl ${
+        <div className="absolute right-4 top-[7.5rem] z-30">
+          <div className={`rounded-xl border px-4 py-3 shadow-[0_16px_42px_rgba(0,0,0,0.38)] backdrop-blur-xl ${
             deleteFeedback.tone === "success"
-              ? "border-(--status_success)/30 bg-(--bg-panel)/92 text-(--status-success)"
-              : "border-(--status_danger)/25 bg-(--bg-panel)/94 text-(--status-danger)"
+              ? "border-[rgba(45,212,191,0.25)] bg-[rgba(15,31,38,0.92)] text-[#a7f3d0]"
+              : "border-[rgba(255,107,107,0.24)] bg-[rgba(37,16,19,0.94)] text-[#ffb4b4]"
           }`}>
             <div className="text-sm font-medium">{deleteFeedback.message}</div>
           </div>
