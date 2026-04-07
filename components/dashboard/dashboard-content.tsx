@@ -104,12 +104,17 @@ export function DashboardContent({
     }
   };
 
-  const handleDeleteSimulation = async (project: Project) => {
-    const confirmed = globalThis.confirm(
-      `Delete "${project.name}"?\n\nThis will permanently remove all branches, snapshots, events, and notes.`
-    );
-    if (!confirmed) return;
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState<Project | null>(null);
 
+  const handleDeleteSimulation = async (project: Project) => {
+    setDeleteConfirmProject(project);
+  };
+
+  const confirmDelete = async () => {
+    const project = deleteConfirmProject;
+    if (!project) return;
+
+    setDeleteConfirmProject(null);
     setDeletingProjectId(project.id);
     try {
       const response = await fetch(`/api/projects/${project.id}`, {
@@ -128,9 +133,8 @@ export function DashboardContent({
       setTimeout(() => setDeleteToast(null), 3000);
     } catch (error) {
       console.error("Delete failed:", error);
-      globalThis.alert(
-        `Could not delete "${project.name}".\n\n${error instanceof Error ? error.message : "Unknown error"}`
-      );
+      setDeleteToast(`Failed to delete: ${error instanceof Error ? error.message : "Unknown error"}`);
+      setTimeout(() => setDeleteToast(null), 5000);
     } finally {
       setDeletingProjectId(null);
     }
@@ -147,8 +151,42 @@ export function DashboardContent({
       {/* Delete toast */}
       {deleteToast && (
         <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-300">
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/80 px-4 py-3 text-sm text-emerald-300 shadow-lg backdrop-blur-sm">
-            ✓ {deleteToast}
+          <div className={`rounded-lg border px-4 py-3 text-sm shadow-lg backdrop-blur-sm ${
+            deleteToast.startsWith("Failed") 
+              ? "border-red-500/20 bg-red-950/80 text-red-300"
+              : "border-emerald-500/20 bg-emerald-950/80 text-emerald-300"
+          }`}>
+            {deleteToast.startsWith("Failed") ? "✕" : "✓"} {deleteToast}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-4 max-w-sm rounded-xl border border-white/10 bg-[#0c1014] p-6 shadow-2xl">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
+              <Trash2 className="h-6 w-6 text-red-400" />
+            </div>
+            <h3 className="mb-2 text-lg font-semibold text-white">Delete Simulation?</h3>
+            <p className="mb-6 text-sm text-white/50">
+              Are you sure you want to delete "{deleteConfirmProject.name}"? 
+              This will permanently remove all branches, snapshots, events, and notes.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirmProject(null)}
+                className="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white/70 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 rounded-lg bg-red-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-600"
+              >
+                Delete
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -390,7 +428,7 @@ function ProjectCard({
             onDelete();
           }}
           disabled={isDeleting}
-          className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-white/20 transition-all hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+          className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white/20 transition-all hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
           title="Delete simulation"
         >
           {isDeleting ? (
