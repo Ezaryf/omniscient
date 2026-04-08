@@ -24,6 +24,7 @@ function createTestWorldState(): WorldState {
         activeIntent: null,
         intentHistory: [],
         position: { x: 100, y: 100 },
+        description: "",
         status: "alive",
       },
       {
@@ -41,6 +42,7 @@ function createTestWorldState(): WorldState {
         activeIntent: null,
         intentHistory: [],
         position: { x: 300, y: 200 },
+        description: "",
         status: "alive",
       },
     ],
