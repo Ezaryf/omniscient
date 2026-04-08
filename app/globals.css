@@ -423,6 +423,69 @@
   }
 }
 
+/* Smooth drag transitions */
+.drag-handle {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.15s ease;
+}
+
+.drag-handle:hover {
+  transform: translateY(-1px);
+}
+
+.drag-handle:active {
+  transition: transform 0.08s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.08s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* React Flow node hover enhancement */
+.react-flow__node {
+  transition: filter 0.2s ease;
+}
+
+.react-flow__node:hover {
+  filter: brightness(1.08);
+}
+
+/* React Flow controls styling */
+.react-flow__controls {
+  box-shadow: none !important;
+}
+
+.react-flow__controls-button {
+  background: rgba(0, 0, 0, 0.8) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-bottom: none !important;
+  width: 32px !important;
+  height: 32px !important;
+  backdrop-filter: blur(12px);
+  transition: all 0.15s ease !important;
+}
+
+.react-flow__controls-button:first-child {
+  border-radius: 12px 12px 0 0 !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-radius: 0 0 12px 12px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: rgba(255, 255, 255, 0.5) !important;
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.react-flow__controls-button:hover svg {
+  fill: rgba(255, 255, 255, 0.9) !important;
+}
+
 /* Pulse animation for critical fronts */
 .graph-pulse {
   animation: graphPulse 2.4s ease-in-out infinite;
